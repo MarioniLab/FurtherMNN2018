@@ -31,11 +31,18 @@ blocks <- rep(seq_len(10), length.out=ncol(sce.68))
 clusters <- quickCluster(sce.68, min.mean=0.1, block=blocks, method="igraph", block.BPPARAM=MulticoreParam(2))
 ##table(clusters)
 ##table(clusters, blocks)
-
 sce.68 <- computeSumFactors(sce.68, clusters=clusters, min.mean=0.1, BPPARAM=MulticoreParam(2))
 ##plot(sce.68$scater_qc$all$total_counts, sizeFactors(sce.68), log="xy")
 
 saveRDS(file="sce.pbmc68k.rds", sce.68)
+
+# Modelling the mean-variance trend.
+tmp <- normalize(sce.68) 
+fit.68 <- trendVar(tmp, use.spikes=FALSE, loess.args=list(span=0.1))
+##plot(fit.68$mean, fit.68$vars)
+##curve(fit.68$trend(x), add=TRUE, col="red")
+dec.68 <- decomposeVar(fit=fit.68)
+saveRDS(file="dec.pbmc68k.rds", dec.68)
 
 # Cleaning out the memory.
 rm(list=ls())
@@ -67,8 +74,16 @@ sce.4 <- sce.4[,!discard]
 # Performing normalization.
 clusters <- quickCluster(sce.4, min.mean=0.1, method="igraph")
 ##table(clusters)
-
 sce.4 <- computeSumFactors(sce.4, clusters=clusters, min.mean=0.1, BPPARAM=MulticoreParam(2))
 ##plot(sce.4$scater_qc$all$total_counts, sizeFactors(sce.4), log="xy")
 
 saveRDS(file="sce.t4k.rds", sce.4)
+
+# Modelling the mean-variance trend.
+tmp <- normalize(sce.4)
+fit.4 <- trendVar(tmp, use.spikes=FALSE, loess.args=list(span=0.1, control=loess.control(iterations=10)))
+##plot(fit.4$mean, fit.4$vars)
+##curve(fit.4$trend(x), add=TRUE, col="red")
+dec.4 <- decomposeVar(fit=fit.4)
+saveRDS(file="dec.pbmc4k.rds", dec.4)
+
