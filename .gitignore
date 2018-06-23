@@ -1,0 +1,5 @@
+*.pdf
+*.rds
+*.tsv
+raw_data/
+results/
