@@ -63,7 +63,9 @@ plotFUNb <- function(fname, Y, subset=NULL, ...) {
 
 t.unc <- as.matrix(t(logcounts(sce)))
 
-## Generating a t-SNE plot.
+# Generating a t-SNE plot.
+# Note that this already involves an internal PCA step with 50 dimensions,
+# which matches the dimensionality reduction of fastMNN() and Seurat.
 library(Rtsne)
 tsne.unc <- Rtsne(t.unc, perplexity = 90)
 plotFUN("results/tsne_unc_type.png", tsne.unc$Y, main="Uncorrected", xlab="tSNE 1",ylab="tSNE 2")
@@ -85,11 +87,6 @@ gc()
 mnn.out <- mnnCorrect(logcounts(sceF), logcounts(sceA), k=20, sigma=0.1,cos.norm.in=TRUE, cos.norm.out=TRUE, var.adj=TRUE,compute.angle=TRUE)
 t.mnn <- as.matrix(t(do.call(cbind, mnn.out$corrected)))
 
-#png(file="results/angles.png",width=900,height=700)
-#par(mfrow=c(1,1),mar=c(6,6,4,2),cex.axis=2,cex.main=3,cex.lab=2.5)
-#hist(mnn.out$angles[[2]],xlab="Angle",ylab="Frequency",main="")
-#dev.off()
-
 # Generating a t-SNE plot.
 set.seed(0)
 tsne.mnn <- Rtsne(t.mnn, perplexity = 90)
@@ -101,13 +98,6 @@ gc()
 pca.mnn <- prcomp(t.mnn[pca.retain,], rank=2)
 plotFUN("results/pca_mnn_type.png", pca.mnn$x, subset=pca.retain, main="MNN", xlab="PC 1",ylab="PC 2")
 plotFUNb("results/pca_mnn_batch.png", pca.mnn$x, subset=pca.retain, main="MNN", xlab="PC 1",ylab="PC 2")
-
-## Generating diffusion map plots.
-#library(destiny)
-#dm<-DiffusionMap(t.mnn,n_local = 150)
-#plotFUN("results/mnnFAdm12.png", dm@eigenvectors[,1:2], main="MNN",  xlab="DC 1",ylab="DC 2")
-#plotFUN("results/mnnFAdm23.png", cbind(dm@eigenvectors[,2],dm@eigenvectors[,3]), main="MNN",  xlab="DC 2",ylab="DC 4")
-#plotFUN("results/mnnFAdm13.png", cbind(dm@eigenvectors[,1],dm@eigenvectors[,3]), main="MNN",  xlab="DC 2",ylab="DC 4")
 
 rm(t.mnn)
 gc()
