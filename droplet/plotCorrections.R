@@ -52,10 +52,11 @@ plotFUNb <- function(fname, Y, subset=NULL, ...) {
 }
 
 ######################## 
-# Running it without any correction.
+# Running it without any correction (but with a PCA, to make things manageable w.r.t. time).
 
 set.seed(1000)
-t.unc <- t(cbind(logcounts(sce.68), logcounts(sce.4)))
+out <- scran:::.multi_pca(list(logcounts(sce.68), logcounts(sce.4)), d=50, approximate=TRUE, use.crossprod=TRUE)
+t.unc <- do.call(rbind, out)
 
 # Generating a t-SNE plot.
 set.seed(0)
