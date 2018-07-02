@@ -1,11 +1,15 @@
 # This script prepares data for the haematopoiesis analysis.
 
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+
 ##########################################
 ##########################################
 
 # Read the counts, metadata of Nestorowa et al. 2016
 library(scater)
-dataF <- readSparseCounts("raw_data/GSE81682_HTSeq_counts.txt.gz")
+fname.F <- bfcrpath(bfc, "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/suppl/GSE81682_HTSeq_counts.txt.gz")
+dataF <- readSparseCounts(fname.F)
 
 library(SingleCellExperiment)
 sceF <- SingleCellExperiment(list(counts=dataF))
@@ -14,7 +18,8 @@ sceF <- sceF[!grepl("^ERCC-", rownames(sceF)),] # removing spike-ins completely.
 dim(sceF)
 
 # Loading in the metadata.
-metaF <- read.table("raw_data/metaF.txt", stringsAsFactors = FALSE, header=TRUE, check.names=FALSE)
+meta.fname <- bfcrpath(bfc, "http://blood.stemcells.cam.ac.uk/data/all_cell_types.txt")
+metaF <- read.table(meta.fname, stringsAsFactors = FALSE, header=TRUE, check.names=FALSE)
 metainds <- match(colnames(dataF), rownames(metaF))
 metaF <- metaF[metainds,] # This will contain NA's... which is okay, at this point, to preserve length.
 
@@ -45,12 +50,14 @@ gc()
 ##########################################
 
 # Download and read the counts and meta data of Paul et al. 2015
-dataA <- readSparseCounts("raw_data/umitab_Amit.txt.gz", quote='"')
+fname.A <- bfcrpath(bfc, "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE72nnn/GSE72857/suppl/GSE72857_umitab.txt.gz")
+dataA <- readSparseCounts(fname.A, quote='"')
 sceA <- SingleCellExperiment(list(counts=dataA))
 dim(sceA)
 
 # Only selecting cells that are in the metadata.
-metaA <- read.csv2("../Haematopoiesis/MAP.csv",sep=",",stringsAsFactors = FALSE, head=TRUE, row.names=1)
+map.fname <- bfcrpath(bfc, "https://raw.githubusercontent.com/MarioniLab/MNN2017/master/Haematopoiesis/MAP.csv")
+metaA <- read.csv2(map.fname, sep=",", stringsAsFactors = FALSE, head=TRUE, row.names=1)
 metainds <- match(rownames(metaA), colnames(sceA))
 sceA <- sceA[,metainds]
 
@@ -72,7 +79,8 @@ gc()
 ##########################################
 
 # Download list of highly variable genes identified by Nestrowa et al. 2016
-TFs <- read.table("raw_data/coordinates_gene_counts_flow_cytometry.txt.gz", nrows=1, stringsAsFactors=FALSE)
+hvg.fname <- bfcrpath(bfc, "http://blood.stemcells.cam.ac.uk/data/coordinates_gene_counts_flow_cytometry.txt.gz")
+TFs <- read.table(hvg.fname, nrows=1, stringsAsFactors=FALSE)
 features <- as.character(unlist(TFs))
 features <- features[grep("ENSMUS", features)]
 
