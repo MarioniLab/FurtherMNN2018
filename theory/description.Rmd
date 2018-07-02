@@ -89,11 +89,15 @@ To provide better inputs to `mnnCorrect()`, `r Biocpkg("scran")` now contains th
 This accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
 Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
 
-We deliberately chose to downscale all batches, rather than scale all batches to the mean or median coverage.
+We deliberately chose to downscale all batches rather than scale all batches to the mean or median coverage.
 By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
-This suppresses differences in the technical noise between batches and simplifies the correction.
+This suppresses batch-to-batch differences in the technical noise at low counts and improves the quality of the MNN correction.
 Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
-Obviously, biological variation will also be shrunk towards zero, but this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
+
+Obviously, biological variation will also experience greater shrinkage towards zero. 
+However, this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
+In addition, technical noise at large counts is less pronounced, so reduced shrinkage is not a problem.
+We note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
 
 ## Computational performance 
 
