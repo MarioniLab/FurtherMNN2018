@@ -6,12 +6,15 @@ library(biomaRt)
 library(scater)
 library(SingleCellExperiment)
 
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+
 ##############
 ## GSE81076 ##
 ##############
 
 # Download file from GEO.
-gse81076 <- file.path('raw_data', 'GSE81076_D2_3_7_10_17.txt.gz')
+gse81076 <- bfcrpath(bfc, "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81076/suppl/GSE81076%5FD2%5F3%5F7%5F10%5F17%2Etxt%2Egz")
 gse81076.df <- readSparseCounts(gse81076)
 
 # Construct the meta data from the cell names.
@@ -66,7 +69,7 @@ gc()
 ##############
 
 # Download file from GEO.
-gse85241 <- file.path('raw_data', 'GSE85241_cellsystems_dataset_4donors_updated.csv.gz')
+gse85241 <- bfcrpath(bfc, "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE85nnn/GSE85241/suppl/GSE85241%5Fcellsystems%5Fdataset%5F4donors%5Fupdated%2Ecsv%2Egz")
 gse85241.df <- readSparseCounts(gse85241, quote='"')
 
 # Construct the meta data from the cell names.
@@ -199,15 +202,15 @@ gc()
 # - Next X columns are the RPKMs.
 # - Remaining X columns are the counts.
 
-emat <- "raw_data/pancreas_refseq_rpkms_counts_3514sc.txt"
-col.names <- read.table(emat, header=FALSE, sep="\t", stringsAsFactors=FALSE, comment.char="", nrows = 1)[,-1]
+emat <- bfcrpath(bfc, "https://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-5061/files/E-MTAB-5061.processed.1.zip")
+col.names <- read.table(unz(emat, "pancreas_refseq_rpkms_counts_3514sc.txt"), header=FALSE, sep="\t", stringsAsFactors=FALSE, comment.char="", nrows = 1)[,-1]
 ncells <- length(col.names)
 
 what <- vector("list", ncells*2 + 2)
 what[[1]] <- "character"
 what[seq_len(ncells) + ncells + 2] <- "integer"
 
-emtab.df <- read.table(emat, header=FALSE, sep="\t", stringsAsFactors=FALSE, colClasses=what, skip=1)
+emtab.df <- read.table(unz(emat, "pancreas_refseq_rpkms_counts_3514sc.txt"), header=FALSE, sep="\t", stringsAsFactors=FALSE, colClasses=what, skip=1)
 emtab.df <- emtab.df[!duplicated(emtab.df[,1]),]
 row.names <- emtab.df[,1]
 emtab.df <- emtab.df[,-1]
@@ -216,7 +219,8 @@ rownames(emtab.df) <- row.names
 colnames(emtab.df) <- col.names
 
 # Reading in the metadata and constructing the appropriate meta data columns, i.e. donor, plate, protocol, study
-emtab.sdrf <- read.delim("raw_data/E-MTAB-5061.sdrf.txt", stringsAsFactors=FALSE)
+meta.fname <- bfcrpath(bfc, "https://www.ebi.ac.uk/arrayexpress/files/E-MTAB-5061/E-MTAB-5061.sdrf.txt")
+emtab.sdrf <- read.delim(meta.fname, stringsAsFactors=FALSE)
 emtab.meta <- emtab.sdrf[, c("Assay.Name", "Characteristics.cell.type.", "Characteristics.individual.")]
 colnames(emtab.meta) <- c("Sample", "CellType", "Donor")
 emtab.meta$Study <- "E-MTAB-5061"
