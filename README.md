@@ -1,4 +1,4 @@
-# FurtherMNN2017
+# Further MNN algorithm development
 
 ## Overview
 
@@ -20,4 +20,5 @@ Each subdirectory will usually contain:
 - `prepareData.R`, to download, pre-process and normalize the data.
 - `plotCorrections.R`, to perform the batch correction and visualize the result with t-SNE plots.
 
-Downloading is performed using [_BiocFileCache_](https://bioconductor.org/packages/BiocFileCache), which will cache the files locally after the first download to save time and bandwidth.
+Data file downloads are performed using the [_BiocFileCache_](https://bioconductor.org/packages/BiocFileCache) package to save time and bandwidth.
+This will cache the files locally after the initial download, and reuse the cached versions when the script is re-run. 
