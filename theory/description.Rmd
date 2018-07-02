@@ -1,0 +1,78 @@
+---
+title: A description of the theory behind the `fastMNN` algorithm
+author: Aaron Lun
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc_float: yes
+---
+
+# Overview
+
+The `fastMNN()` approach is much simpler than the original `mnnCorrect()` algorithm, and proceeds in several steps.
+
+1. Perform a multi-sample PCA on the (cosine-)normalized expression values to reduce dimensionality.
+2. Identify MNN pairs in the low-dimensional space between a reference batch and a target batch.
+3. Remove variation along the average batch vector in both reference and target batches.
+4. Correct the cells in the target batch towards the reference, using locally weighted correction vectors.
+5. Merge the corrected target batch with the reference, and repeat with the next target batch.
+
+# Reducing dimensionality
+
+We first perform a PCA across all cells in all batches to reduce dimensionality.
+This decreases the size of the data for further analysis - in particular, improving the speed of nearest-neighbour detection.
+It also removes high-dimensional technical noise that can interfere with nearest-neighbour detection.
+We stress that this step has no role in the batch correction itself, and indeed, we would expect the first few PCs to be dominated by the batch effect.
+We also note that this does not compromise the validity of the MNN approach, which is based on distances between cells.
+Provided enough PCs are taken (default `d=50`), the distances between cells in the PC space can approximate well the distances in the original space.
+
+The procedure itself is as conceptually simple as merging all datasets together and performing a PCA on the merged dataset.
+The only modification to the procedure is to ensure that each batch contributes equally to the basis vectors.
+Specifically, the mean vector used for centering is defined as the grand mean of the batch-specific mean vectors;
+and the contribution of each batch to the gene-gene covariance matrix is divided by the number of cells in each batch.
+This ensures that batches with large numbers of cells do not dominate the PCA calculations.
+All cells are then projected into the PC space using the identified basis vectors.
+
+# Identifying MNN pairs
+
+The use of mutually nearest neighbours is the largely same as described in the original manuscript and for `mnnCorrect()`.
+As before, MNNs will be identified between cells of the same type or state across batches, assuming that the batch effect is orthogonal.
+The choice of `k` should be driven by the minimum subpopulation size in each batch, with a default of `k=20`.
+The only modification is that nearest neighbour identification is now performed on the PC space rather than the original gene expression space.
+
+Of course, it is (again) possible that MNNs are incorrectly identified between cells of different type or state across batches.
+This would require the presence of unique subpopulations in each batch,
+which are closer to each other than to subpopulations that are shared across batches.
+Such a scenario seems somewhat unfortunate.
+Even with manual curation, it would be difficult to consider these subpopulations as distinct cell types in the presence of an arbitrary batch effect.
+
+# Removing intra-batch variation
+
+Once MNN pairs are identified, the correction vector for each paired cell in the target batch is computed.
+If a paired cell is involved in multiple MNN pairs, its correction vector is defined as an average across all of its pairs.
+The average batch vector is then computed by averaging across the correction vectors for all paired cells.
+This represents an estimate of the overall batch effect.
+
+We then project all cells in the target batch onto the average batch vector.
+Any variation in the projected coordinates represents uninteresting technical noise, assuming orthogonality between batch and biological effects.
+This is eliminated by adjusting the cell coordinates so that the projected coordinates are equal to the mean within the target batch.
+We repeat this for the reference batch.
+
+Note that this step is _not_ the batch correction, we are simply removing variation within each batch.
+The aim is to avoid the "kissing" problem for dense subpopulations, whereby MNNs are only identified on the surface of each subpopulation.
+In such cases, subsequent correction will fail to fully merge subpopulations as the correction vectors only bring the surfaces into contact.
+By removing variation along the batch vector, we can avoid this problem as the subpopulations no longer have any "width" in either batch.
+
+That said, the use of the average batch vector assumes that the same batch effect is present at all subpopulations.
+This ignores variation in the batch effects across subpopulations, so some kissing may still be expected when this variation is present.
+
+# Performing the batch correction
+
+For each cell $i$ in the target batch, we identify the `k` nearest neighbouring paired cells, i.e., cells in the same batch that are involved in a MNN pair.
+The correction vector for cell $i$ is defined as a locally weighted average of the correction vector of the neighbouring paired cells.
+The weighting is done using a tricube scheme, where the bandwidth is defined as `ndist=3` times the median distance to the `k` neighbours.
+This favours neighbours that are closer to $i$ and provides some robustness against cells in different subpopulations (e.g., if subpopulation to which $i$ belongs is small).
+
+Cells in the target batch are then batch-corrected by subtracting the correction vector from the coordinates in the PC space.
+The newly corrected cells are merged with the reference batch, and the entire process is repeated with a new batch.
+Note that the PCA step is only done once at the start, though.
