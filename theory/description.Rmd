@@ -17,7 +17,9 @@ The `fastMNN()` approach is much simpler than the original `mnnCorrect()` algori
 4. Correct the cells in the target batch towards the reference, using locally weighted correction vectors.
 5. Merge the corrected target batch with the reference, and repeat with the next target batch.
 
-# Reducing dimensionality
+# Description of steps
+
+## Reducing dimensionality
 
 We first perform a PCA across all cells in all batches to reduce dimensionality.
 This decreases the size of the data for further analysis - in particular, improving the speed of nearest-neighbour detection.
@@ -33,7 +35,7 @@ and the contribution of each batch to the gene-gene covariance matrix is divided
 This ensures that batches with large numbers of cells do not dominate the PCA calculations.
 All cells are then projected into the PC space using the identified basis vectors.
 
-# Identifying MNN pairs
+## Identifying MNN pairs
 
 The use of mutually nearest neighbours is the largely same as described in the original manuscript and for `mnnCorrect()`.
 As before, MNNs will be identified between cells of the same type or state across batches, assuming that the batch effect is orthogonal.
@@ -46,7 +48,7 @@ which are closer to each other than to subpopulations that are shared across bat
 Such a scenario seems somewhat unfortunate.
 Even with manual curation, it would be difficult to consider these subpopulations as distinct cell types in the presence of an arbitrary batch effect.
 
-# Removing intra-batch variation
+## Removing intra-batch variation
 
 Once MNN pairs are identified, the correction vector for each paired cell in the target batch is computed.
 If a paired cell is involved in multiple MNN pairs, its correction vector is defined as an average across all of its pairs.
@@ -66,7 +68,7 @@ By removing variation along the batch vector, we can avoid this problem as the s
 That said, the use of the average batch vector assumes that the same batch effect is present at all subpopulations.
 This ignores variation in the batch effects across subpopulations, so some kissing may still be expected when this variation is present.
 
-# Performing the batch correction
+## Performing the batch correction
 
 For each cell $i$ in the target batch, we identify the `k` nearest neighbouring paired cells, i.e., cells in the same batch that are involved in a MNN pair.
 The correction vector for cell $i$ is defined as a locally weighted average of the correction vector of the neighbouring paired cells.
@@ -76,3 +78,20 @@ This favours neighbours that are closer to $i$ and provides some robustness agai
 Cells in the target batch are then batch-corrected by subtracting the correction vector from the coordinates in the PC space.
 The newly corrected cells are merged with the reference batch, and the entire process is repeated with a new batch.
 Note that the PCA step is only done once at the start, though.
+
+# Further comments
+
+## Using `multiBatchNorm()`
+
+Previously, `mnnCorrect()` relied solely on the cosine normalization to adjust for differences in coverage between batches.
+This was not ideal as the cosine normalization operated on the log-space, and would not correctly adjust for scaling differences in the raw space.
+To provide better inputs to `mnnCorrect()`, `r Biocpkg("scran")` now contains the `multiBatchNorm()` function.
+This accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
+Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
+
+We deliberately chose to downscale all batches, rather than scale all batches to the mean or median coverage.
+By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
+This suppresses differences in the technical noise between batches and simplifies the correction.
+Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
+Obviously, biological variation will also be shrunk towards zero, but this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
+
