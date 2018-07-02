@@ -95,3 +95,9 @@ This suppresses differences in the technical noise between batches and simplifie
 Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
 Obviously, biological variation will also be shrunk towards zero, but this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
 
+## Computational performance 
+
+Using a single core, the `fastMNN()` function completes in 17 minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
+Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized.
+Memory usage is minimal through the use of the `r Biocpkg("DelayedArray")` framework, which avoids creating the merged matrix explicitly for PCA.
+The nearest neighbour search is performed using the `r Biocpkg("kmknn")` package, which provides a speed boost over conventional KD-trees for high-dimensional data (see https://github.com/LTLA/OkNN2018) and also supports parallelization.
