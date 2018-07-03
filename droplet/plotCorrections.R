@@ -12,11 +12,11 @@ normed <- multiBatchNorm(sce.68[universe,], sce.4[universe,])
 sce.68 <- normed[[1]]
 sce.4 <- normed[[2]]
 
-# Taking the top 50000 genes with the largest biological components.
+# Taking the top 5000 genes with the largest biological components.
 dec.68 <- readRDS("dec.pbmc68k.rds")
 dec.4 <- readRDS("dec.t4k.rds")
-combined <- combineVar(dec.68[universe,], dec.4[universe,])
-to.use <- rownames(combined)[order(combined$bio, decreasing=TRUE)[1:5000]]
+combined <- (dec.68[universe,"bio"] + dec.4[universe,"bio"])/2
+to.use <- universe[order(combined, decreasing=TRUE)[1:5000]]
 
 sce.68 <- sce.68[to.use,]
 sce.4 <- sce.4[to.use,]
