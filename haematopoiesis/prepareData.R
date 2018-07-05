@@ -2,6 +2,7 @@
 
 library(BiocFileCache)
 bfc <- BiocFileCache(ask=FALSE)    
+set.seed(1000)
 
 ##########################################
 ##########################################
