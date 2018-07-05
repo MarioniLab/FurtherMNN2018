@@ -8,6 +8,7 @@ library(SingleCellExperiment)
 
 library(BiocFileCache)
 bfc <- BiocFileCache(ask=FALSE)    
+set.seed(10000)
 
 ##############
 ## GSE81076 ##
@@ -183,7 +184,7 @@ sce.gse86473 <- computeSumFactors(sce.gse86473, clusters=clusters, min.mean=1)
 ##summary(sizeFactors(sce.gse86473))
 
 #sce.gse86473 <- computeSpikeFactors(sce.gse86473, general.use=FALSE) # As there are actually no spike-in counts, anywhere.
-sce.gse86473 <- normalize(sce.gse86473)
+suppressWarnings(sce.gse86473 <- normalize(sce.gse86473))
 saveRDS(file="sce.gse86473.rds", sce.gse86473)
 
 # Detect highly variable genes (nothing obvious to block on, unfortunately).

@@ -17,6 +17,7 @@ decD <- readRDS("dec.emtab5601.rds")
 # Keeping the top 5000 HVGs with the largest average biological component.
 rownames(decC) <- rownames(sceC) <- scater::uniquifyFeatureNames(rownames(sceC), rowData(sceC)$Symbol)
 universe <- Reduce(intersect, list(rownames(decA), rownames(decB), rownames(decC), rownames(decD)))
+universe <- universe[!grepl("^ERCC-", universe)]
 combined.bio <- decA[universe,"bio"] + decB[universe,"bio"] + decC[universe,"bio"] + decD[universe,"bio"]
 chosen <- universe[order(combined.bio, decreasing=TRUE)[1:5000]]
 
