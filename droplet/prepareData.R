@@ -4,6 +4,7 @@ library(DropletUtils)
 
 library(BiocFileCache)
 bfc <- BiocFileCache(ask=FALSE)    
+set.seed(1000)
 
 ##########################################
 ##########################################
@@ -58,6 +59,7 @@ gc()
 ##########################################
 
 # Pre-processing the 4K T-cell dataset.
+bfc <- BiocFileCache(ask=FALSE)    
 path.4 <- bfcrpath(bfc, "http://cf.10xgenomics.com/samples/cell-exp/2.1.0/t_4k/t_4k_filtered_gene_bc_matrices.tar.gz")
 tmp.4 <- tempfile()
 untar(path.4, exdir=tmp.4)
@@ -95,5 +97,5 @@ fit.4 <- trendVar(tmp, use.spikes=FALSE, loess.args=list(span=0.1, control=loess
 ##plot(fit.4$mean, fit.4$vars)
 ##curve(fit.4$trend(x), add=TRUE, col="red")
 dec.4 <- decomposeVar(fit=fit.4)
-saveRDS(file="dec.pbmc4k.rds", dec.4)
+saveRDS(file="dec.t4k.rds", dec.4)
 
