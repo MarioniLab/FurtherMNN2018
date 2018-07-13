@@ -109,7 +109,16 @@ gc()
 # Performing the correction with faster MNN.
 
 set.seed(1000)
-mnn.out2 <- fastMNN(logcounts(sceA), logcounts(sceB), logcounts(sceC), logcounts(sceD), k=20, approximate=TRUE, cos.norm=TRUE)
+pcs <- multiBatchPCA(
+    cosineNorm(logcounts(sceA)), 
+    cosineNorm(logcounts(sceB)), 
+    cosineNorm(logcounts(sceC)), 
+    cosineNorm(logcounts(sceD)),
+    approximate=TRUE
+)
+mnn.out.umi <- fastMNN(pcs[[1]], pcs[[2]], k=20, pc.input=TRUE)
+mnn.out.ss2 <- fastMNN(pcs[[3]], pcs[[4]], k=20, pc.input=TRUE)
+mnn.out2 <- fastMNN(mnn.out.umi$corrected, mnn.out.ss2$corrected, k=20, pc.input=TRUE)
 t.mnn <- mnn.out2$corrected
 
 # Generating a t-SNE plot.
