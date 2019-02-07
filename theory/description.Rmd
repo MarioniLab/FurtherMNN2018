@@ -17,6 +17,74 @@ The `fastMNN()` approach is much simpler than the original `mnnCorrect()` algori
 4. Correct the cells in the target batch towards the reference, using locally weighted correction vectors.
 5. Merge the corrected target batch with the reference, and repeat with the next target batch.
 
+# Cosine normalization
+
+## Rationale
+
+If scaling normalization is only performed _within_ each batch, there may be a systematic scaling difference in the normalized expression values between batches.
+This unnecessarily adds an extra dimension to the differences between batches, which complicates later correction steps.
+
+Scaling differences are best avoided by ensuring that the size factors bring all batches to the same scale, which is the purpose of `multiBatchNorm()`.
+This function downscales all other batches to the same scale as the lowest-coverage batch prior to addition of a pseudo-count (of unity) and log-transformation.
+The use of downscaling mitigates differences in variance at low-coverage genes, by increasing the impact of the pseudo-count to shrink all log-expression values towards zero.
+
+So, ideally, one would address this problem during normalization.
+However, this is not possible if we consider `fastMNN()` in isolation with arbitrary log-expression values.
+Accurately reversing the log-transformation requires knowledge of the base of the log function and the added pseudo-count, 
+which complicates the interface at best and may not be available at worst.
+
+Cosine normalization of the log-expression values represents the next-best solution for removing these differences between batches.
+Real single-cell data contains many small counts (where the log function is near-linear) or many zeroes (which remain zero when the pseudo-count is 1).
+In these applications, scaling differences due to separate normalization will not manifest as the expected shift in the log-transformed expression.
+Rather, they are better represented as scaling differences in the log-expression vectors, which cosine normalization aims to remove.
+
+## Preserving orthogonality
+
+If the batch effect was orthogonal to the biological subspace in the un-normalized space, is this still the case after cosine normalization?
+Not in general - one can imagine a simple 2D scenario where the biological subspace is a horizontal line and the batch effect is a vertial shift.
+Cosine normalization will map the manifolds onto the unit circle around the origin and break orthogonality.
+
+We can consider the cases where this discrepancy is minimized. 
+If we have the biological subspace $B$ and a batch vector $W$, the cosine-normalized expression without the batch vector is
+
+$$
+\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \;,
+$$
+
+for a cell corresponding to $x$.
+The cosine-normalized expression after adding the batch vector is
+
+$$
+\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} \;.
+$$
+
+The difference between the two represents the batch vector in cosine-normalized space. 
+Biological differences in cosine-normalized space can be represented by differences between the cell corresponding to $x$ and another cell corresponding to $y$, i.e.,
+
+$$
+\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} 
+$$
+
+for any $y\ne x$.
+We ask whether the batch vector is orthogonal to an arbitrary biological difference vector, i.e., we look at
+
+$$
+\begin{align*}
+& \left(\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)^T
+\left(\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} - \frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right) \\
+& = \left(\frac{x^T\mathbf{B}^T\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{y^T\mathbf{B}^T\mathbf{B}x}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)
+\left[ \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x + W^TW}} - \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right] \;,
+\end{align*}
+$$
+
+which is only close to zero for arbitrary $y$ when $W^TW$ is small relative to $x^T\mathbf{B}^T\mathbf{B}x$.
+In other words, the batch effect remains approximately orthogonal if the batches are not too far apart relative to the L2 norm of the expression vector.
+This is probably reasonable if the batch effect is not as large as the magnitude of expression for each gene.
+
+Of course, this is all rather academic, as one can simply change the orthogonality assumption to refer to the cosine-normalized space in the first place.
+The cosine-normalized space loses one dimension of variation relative to the un-normalized space, but both are still high-dimensional,
+so the assumption of orthogonality is still reasonable in the former.
+
 # Reducing dimensionality
 
 ## Performing an multi-batch PCA
