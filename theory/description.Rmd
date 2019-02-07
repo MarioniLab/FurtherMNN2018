@@ -208,4 +208,28 @@ We note that standardization of the expression matrix is not advisable here as b
 Using a single core, the `fastMNN()` function completes in 17 minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
 Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized.
 Memory usage is minimal through the use of the `r Biocpkg("DelayedArray")` framework, which avoids creating the merged matrix explicitly for PCA.
-The nearest neighbour search is performed using the `r Biocpkg("kmknn")` package, which provides a speed boost over conventional KD-trees for high-dimensional data (see https://github.com/LTLA/OkNN2018) and also supports parallelization.
+The nearest neighbour search is performed using the `r Biocpkg("BiocNeighbors")` package, which provides a speed boost over conventional KD-trees for high-dimensional data (see https://github.com/LTLA/OkNN2018) and also supports parallelization.
+
+# Known limitations
+
+The key to the performance of any MNN correction method lies in the ability to detect correct MNNs.
+This is not always straightforward.
+When the batch effect is not orthogonal, noise in the biological subspace can cause the wrong MNNs to be identified between the "surfaces" of two cell populations.
+In such cases, orthogonalization is not effective at solving the kissing problem.
+The solution here is to increase `k` to allow the correct MNNs to be identified beyond the population surface.
+
+A more troubling case involves detection of MNNs between two unique populations in different batches, as discussed above.
+This would result in the merging of two distinct subpopulations (i.e., that are genuinely separated on the biological subspace) after batch correction.
+
+- At first glance, this seems like an incorrect outcome, but the actual interpretation varies.
+One can imagine that the separation in the biological subspace represents a batch effect, 
+either technical in nature due to non-orthogonality or due to some uninteresting biological effect (e.g., genetics, sex, age).
+In such cases, an aggressive merge would be a desirable result.
+- If such a merge is definitely undesirable, it is possible to modify the algorithm to avoid it.
+This is achieved by only considering the component of the correction vector for each cell that is parallel to the average batch vector.
+Here, the assumption is that most cells are shared between batches and have the same batch effect - any deviations from the average vector are biological and should be preserved.
+However, this is likely to degrade the performance of the correction in the general case where there is any locality in the batch effect.
+- In any case, if the merge is undesirable and has still occurred, it is possible to recover the differences with an examination of the original expression values.
+One can see if there is any differential expression across conditions that reflect the differences in the two populations along the biological subspace.
+This usually requires replication to distinguish between the random batch effect and genuine biological differences.
+
