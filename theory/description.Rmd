@@ -107,20 +107,20 @@ All cells are then projected into the PC space using the identified basis vector
 
 An interesting question is whether orthogonality is preserved in the low-dimensional subspace.
 Consider the batch effect vector $W$ and the biological subspace defined by the column vectors of $\mathbf{B}$ (for simplicity, we will assume that all vectors are unit length).
-In the original expression space, we have assumed that $W$ is orthogonal to $\mathbf{B}$, i.e., $W\mathbf{B} = 0$.
+In the original expression space, we have assumed that $W$ is orthogonal to $\mathbf{B}$, i.e., $W^T\mathbf{B} = 0$.
 This ensures that MNN pairs are correctly identified between corresponding subpopulations in different batches, as described in the original paper.
 
 Now, consider a projection matrix $\mathbf{V}_k$ from the PCA, corresponding to the first $k$ PCs.
-The key assumption is that $\mathbf{V}_k$ "captures" the entirety of $W$, 
-i.e., there is some linear combination $A$ of the column vectors of $\mathbf{V}_k$ such that $A\mathbf{V}_{k}^T=W$.
-Note that this also means that $A = W\mathbf{V}_k$, due to the orthonormality of the column vectors of $\mathbf{V}_k$.
+The key assumption is that $\mathbf{V}_k$ "captures" the entirety of $W$, i.e., 
+there is some linear combination $A$ of the column vectors of $\mathbf{V}_k$ such that $\mathbf{V}_{k} A =W$.
+Note that this means that $A = \mathbf{V}_k^TW$, due to the orthonormality of the column vectors of $\mathbf{V}_k$.
 
 If we project everything into the subspace defined by $\mathbf{V}_k$, the rotated biological subspace becomes $\mathbf{B}_k = \mathbf{V}^T_k \mathbf{B}$.
-The rotated batch vector becomes $W_k = W \mathbf{V}_k$.
-We see that 
+The rotated batch vector becomes $W_k = \mathbf{V}_k^TW$, which is equal to $A$.
+This means that 
 
 $$
-W_k \mathbf{B}_k = W\mathbf{V}_k \mathbf{V}_k^T \mathbf{B} = A \mathbf{V}_k^T \mathbf{B} = W \mathbf{B} = 0 \;,
+W_k^T \mathbf{B}_k = A^T \mathbf{V}_k^T \mathbf{B} = (\mathbf{V}_k A)^T \mathbf{B} = W^T\mathbf{B} =  0 \;,
 $$
 
 i.e., orthogonality is preserved in the PC space.
