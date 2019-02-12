@@ -183,7 +183,7 @@ clusters <- quickCluster(sce.gse86473, min.mean=1, method="igraph")
 sce.gse86473 <- computeSumFactors(sce.gse86473, clusters=clusters, min.mean=1)
 ##summary(sizeFactors(sce.gse86473))
 
-#sce.gse86473 <- computeSpikeFactors(sce.gse86473, general.use=FALSE) # As there are actually no spike-in counts, anywhere.
+#sce.gse86473 <- computeSpikeFactors(sce.gse86473, general.use=FALSE) # No need for this, as there are actually no spike-in counts, anywhere.
 suppressWarnings(sce.gse86473 <- normalize(sce.gse86473))
 saveRDS(file="sce.gse86473.rds", sce.gse86473)
 
@@ -262,11 +262,14 @@ clusters <- quickCluster(sce.emtab, min.mean=1, method="igraph")
 sce.emtab <- computeSumFactors(sce.emtab, clusters=clusters, min.mean=1)
 ##summary(sizeFactors(sce.emtab))
 
-sce.emtab <- computeSpikeFactors(sce.emtab, general.use=FALSE) 
-sce.emtab <- normalize(sce.emtab)
+sce.emtab <- computeSpikeFactors(sce.emtab, general.use=FALSE)
+# sce.emtab <- normalize(sce.emtab) # Some cells have no spike-in counts, so this will fail. We renormalize later anyway.
 saveRDS(file="sce.emtab5601.rds", sce.emtab)
 
-# Detect highly variable genes.
+# Detect highly variable genes:
+#  - blocking on Donor, as Smart-seq2 variance is highly variable.
+#  - removing cells with no spike-ins, as they are not useful for modelling technical noise.
+#  - removing cells from Donor AZ, which has very low spike-in concentrations.
 for.hvg <- sce.emtab[,sizeFactors(sce.emtab, "ERCC") > 0 & sce.emtab$Donor!="AZ"]
 for.hvg <- multiBlockNorm(for.hvg, for.hvg$Donor) 
 comb.out <- multiBlockVar(for.hvg, for.hvg$Donor)
