@@ -39,7 +39,7 @@ generateSamples <- function(ncells, ndims=2, ngenes=2000)
     return(list(mat=all.dimensions, id=all.clusters))
 }
 
-library(scran)
+library(batchelor)
 library(sva)
 library(limma)
 library(Seurat)
@@ -51,11 +51,11 @@ runAllMethods <- function(...)
 	per.batch <- unlist(lapply(batches, FUN=ncol))
     batch.id <- rep(seq_along(batches), per.batch)
 
-    Xmnn <- do.call(fastMNN, c(batches, list(cos.norm=FALSE, approximate=TRUE)))
+    Xmnn <- do.call(fastMNN, c(batches, list(cos.norm=FALSE, BSPARAM=BiocSingular::IrlbaParam(deferred=TRUE))))
     Xlm <- removeBatchEffect(uncorrected, factor(batch.id))
     Xcom <- ComBat(uncorrected, factor(batch.id), mod=NULL, prior.plots = FALSE)
 
-    mat <- list(uncorrected=t(uncorrected), MNN=Xmnn$corrected, limma=t(Xlm), ComBat=t(Xcom))
+    mat <- list(uncorrected=t(uncorrected), MNN=reducedDim(Xmnn), limma=t(Xlm), ComBat=t(Xcom))
 
     if (length(batches)==2L) {
         colnames(batches[[1]]) <- paste0("Cell", seq_len(ncol(batches[[1]])), "-1")
@@ -74,7 +74,7 @@ runAllMethods <- function(...)
         mat$CCA <- Y@dr$cca.aligned@cell.embeddings
     } 
 
-    return(list(mat=mat, batch=batch.id))
+    list(mat=mat, batch=batch.id)
 }
 
 library(Rtsne)
