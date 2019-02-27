@@ -1,0 +1,414 @@
+---
+title: "Batch correction for the haematopoiesis data sets"
+author: "Aaron Lun, based on code by Laleh Haghverdi and Michael Morgan"
+date: "Revised: 27 February 2019"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    fig_caption: no
+---
+
+```{r, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+library(BiocStyle)
+```
+
+# Overview
+
+This script performs batch correction with each method and creates t-SNE plots for the haematopoietic data sets.
+First we load in the data:
+
+```{r}
+library(SingleCellExperiment)
+dir.create("results", showWarning=FALSE)
+sceA <- readRDS("haem_data_A.rds")
+sceF <- readRDS("haem_data_F.rds")
+```
+
+We re-normalize to bring the two batches onto the same scale.
+This requires us to only use the genes that are present in both batches. 
+
+```{r}
+library(batchelor)
+common <- intersect(rownames(sceA), rownames(sceF))
+nout <- multiBatchNorm(sceA[common,], sceF[common,])
+sceA <- nout[[1]]
+sceF <- nout[[2]]
+```
+
+We set up the file cache and the seed for later use.
+
+```{r}
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+set.seed(123456)
+```
+
+# Identify highly variable genes
+
+We use an existing list of highly variable genes identified by Nestrowa _et al._
+It is straightforward to do this empirically but we will save ourselves the trouble.
+
+```{r}
+hvg.fname <- bfcrpath(bfc,
+    "http://blood.stemcells.cam.ac.uk/data/coordinates_gene_counts_flow_cytometry.txt.gz")
+TFs <- read.table(hvg.fname, nrows=1, stringsAsFactors=FALSE)
+features <- as.character(unlist(TFs))
+features <- features[grep("ENSMUS", features)]
+length(features)
+```
+
+We obviously only retain the genes that are present in our two objects.
+
+```{r}
+stopifnot(identical(rownames(sceA), rownames(sceF)))
+keep <- rownames(sceA) %in% features
+sceA <- sceA[keep,]
+sceF <- sceF[keep,]
+summary(keep)
+```
+
+# Setting up visualizations
+
+First, we need to match the annotation types between the two objects.
+
+```{r}
+sceF$CellType[sceF$CellType=="other"] <- "Unsorted"
+table(sceF$CellType)
+sceA$CellType[sceA$CellType=="ERY"] <- "MEP"
+table(sceA$CellType)
+```
+
+We now combine them together:
+
+```{r}
+sce <- cbind(sceF, sceA)
+sce$Batch <- rep(c("Nestorowa", "Paul"), c(ncol(sceF), ncol(sceA)))
+```
+
+We define colours for each cell type in each batch.
+Basically, the Paul data set uses a lighter shade of colours.
+
+```{r}
+color.legendF <- c(MEP="orange", GMP="chartreuse4", CMP="magenta", 
+    HSPC="cyan", LTHSC="dodgerblue", MPP="blue", LMPP="light blue", Unsorted="grey")
+colmatF <- col2rgb(color.legendF) 
+colmatA <- colmatF + 100 # A lighter shade.
+colmatA[colmatA > 255] <- 255
+
+color.legendA <- setNames(rgb(colmatA[1,], colmatA[2,], colmatA[3,], maxColorValue=255), 
+    names(color.legendF))
+allcolors <- c(color.legendF[sceF$CellType], color.legendA[sceA$CellType])
+first.batch <- sce$Batch=="Nestorowa"
+```
+
+We now construct a plotting function for dimensionality reduction results, coloured by cell type:
+
+```{r}
+plotFUN <- function(fname, Y, subset=NULL, ..., xlab="tSNE 1",ylab="tSNE 2",main="") {
+    if (is.null(subset)) {
+        subset <- seq_len(nrow(Y))
+    }
+    png(fname,width=900,height=700)
+    par(mfrow=c(1,1),mar=c(6,6,4,2),cex.axis=2,cex.main=3,cex.lab=2.5)
+    plot(Y[,1], Y[,2], cex=2,
+         pch=ifelse(first.batch, 21, 1)[subset], 
+         col=ifelse(first.batch, "black", allcolors)[subset],
+         bg=allcolors[subset], xlab=xlab, ylab=ylab, main=main) 
+    dev.off()
+}
+```
+
+... or by batch:
+
+
+```{r}
+batchcolor <- c("lavender","lightcoral")[first.batch + 1]
+plotFUNb <- function(fname, Y, subset=NULL, ...) {
+    if (is.null(subset)) {
+        subset <- seq_len(nrow(Y))
+    }
+    png(fname,width=900,height=700)
+    par(mfrow=c(1,1),mar=c(6,6,4,2),cex.axis=2,cex.main=3,cex.lab=2.5)
+    plot(Y[,1], Y[,2], cex=2,
+         pch=ifelse(first.batch, 21, 1)[subset], 
+         col=ifelse(first.batch, "black", batchcolor)[subset],
+         bg=batchcolor[subset], ...)
+    dev.off()
+}
+```
+
+Note that we'll only use the common cell types for PCA, just to provide a closer visualization of them.
+
+```{r}
+pca.retain <- sce$CellType %in% c("MEP", "GMP", "CMP") 
+summary(pca.retain)
+```
+
+# No correction
+
+Not doing any correction at all:
+
+```{r}
+t.unc <- as.matrix(t(logcounts(sce)))
+```
+
+Generating a t-SNE plot, using a high perplexity to capture the continuous nature of the population.
+Note that this involves an internal PCA step with 50 dimensions, which matches the dimensionality reduction of `fastMNN()` and Seurat.
+
+```{r}
+set.seed(0)
+library(BiocSingular)
+pc.unc <- runPCA(t.unc, BSPARAM=IrlbaParam(), rank=50)
+    
+library(Rtsne)
+tsne.unc <- Rtsne(pc.unc$x, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_unc_type.png", tsne.unc$Y, main="Uncorrected", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_unc_batch.png", tsne.unc$Y, main="Uncorrected", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.unc <- runPCA(t.unc[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_unc_type.png", pca.unc$x, subset=pca.retain, main="Uncorrected", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_unc_batch.png", pca.unc$x, subset=pca.retain, main="Uncorrected", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.unc)
+gc()
+```
+
+# Using classic MNN
+
+We've turned down the sigma to improve mixing.
+
+```{r}
+mnn.out <- mnnCorrect(logcounts(sceF), logcounts(sceA), k=20, sigma=0.1)
+t.mnn <- t(assay(mnn.out))
+```
+
+Generating a t-SNE plot.
+
+```{r}
+set.seed(0)
+pc.mnn <- runPCA(t.mnn, BSPARAM=IrlbaParam(), rank=50)
+tsne.mnn <- Rtsne(pc.mnn$x, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_mnn_type.png", tsne.mnn$Y, main="MNN", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_mnn_batch.png", tsne.mnn$Y, main="MNN", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.mnn <- runPCA(t.mnn[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_mnn_type.png", pca.mnn$x, subset=pca.retain, main="MNN", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_mnn_batch.png", pca.mnn$x, subset=pca.retain, main="MNN", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.mnn)
+gc()
+```
+
+# Using faster MNN
+
+```{r}
+set.seed(1000)
+mnn.out2 <- fastMNN(logcounts(sceF), logcounts(sceA), k=20, 
+    BSPARAM=IrlbaParam(deferred=TRUE))
+t.mnn <- reducedDim(mnn.out2)
+```
+
+Generating a t-SNE plot - this already operates in low-dimensions, so there's no need for another PCA step.
+
+```{r}
+set.seed(0)
+tsne.mnn <- Rtsne(t.mnn, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_mnn2_type.png", tsne.mnn$Y, main="Fast MNN", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_mnn2_batch.png", tsne.mnn$Y, main="Fast MNN", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.mnn <- runPCA(t.mnn[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_mnn2_type.png", pca.mnn$x, subset=pca.retain, main="Fast MNN", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_mnn2_batch.png", pca.mnn$x, subset=pca.retain, main="Fast MNN", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.mnn)
+gc()
+```
+
+# Using limma
+
+Simply appling `removeBatchEffect` here:
+
+```{r}
+library(limma)
+X.lm <- removeBatchEffect(as.matrix(logcounts(sce)), factor(first.batch))
+t.lm <- t(X.lm)
+```
+
+Generating a t-SNE plot.
+
+```{r}
+set.seed(0)
+pc.lm <- runPCA(t.lm, BSPARAM=IrlbaParam(), rank=50)
+tsne.lm <- Rtsne(pc.lm$x, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_limma_type.png", tsne.lm$Y, main="limma", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_limma_batch.png", tsne.lm$Y, main="limma", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.lm <- runPCA(t.lm[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_limma_type.png", pca.lm$x, subset=pca.retain, main="limma", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_limma_batch.png", pca.lm$x, subset=pca.retain, main="limma", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.lm)
+gc()
+```
+
+# Using ComBat
+
+```{r}
+library(sva)
+Z <- factor(first.batch)
+X.combat <- ComBat(as.matrix(logcounts(sce)), Z, mod=NULL,prior.plots = FALSE)
+t.combat <- t(X.combat)
+```
+
+Generating a t-SNE plot.
+
+```{r}
+set.seed(0)
+pc.combat <- runPCA(t.combat, BSPARAM=IrlbaParam(), rank=50)
+tsne.combat <- Rtsne(pc.combat$x, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_combat_type.png", tsne.combat$Y, main="ComBat", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_combat_batch.png", tsne.combat$Y, main="ComBat", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.combat <- runPCA(t.combat[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_combat_type.png", pca.combat$x, subset=pca.retain, main="ComBat", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_combat_batch.png", pca.combat$x, subset=pca.retain, main="ComBat", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.combat)
+gc()
+```
+
+# Using CCA from `r CRANpkg("Seurat")`
+
+## Using our normalized values
+
+This requires some effort to set up all the objects without funnelling it through `r CRANpkg("Seurat")`'s pipeline.
+Bypassing their pipeline is deliberate to ensure that we are comparing only the effect of correction, not the preprocessing.
+
+```{r}
+library(Seurat)
+SeuA <- CreateSeuratObject(logcounts(sceA))
+SeuF <- CreateSeuratObject(logcounts(sceF))
+SeuA@meta.data$group <- "group1"
+SeuF@meta.data$group <- "group2"
+
+SeuA <- ScaleData(SeuA)
+SeuF <- ScaleData(SeuF)
+Y <- RunCCA(SeuF, SeuA, genes.use=rownames(sceA), do.normalize=FALSE)
+suppressWarnings(Y <- AlignSubspace(Y, grouping.var="group", dims.align=1:20))
+
+t.cca <- Y@dr$cca.aligned@cell.embeddings
+```
+
+Generating a t-SNE plot - again, we're working in low-dimensional space already, so no need for a PCA beforehand.
+
+```{r}
+set.seed(0)
+tsne.cca <- Rtsne(t.cca, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_cca_type.png", tsne.cca$Y, main="CCA", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_cca_batch.png", tsne.cca$Y, main="CCA", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.cca <- runPCA(t.cca[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_cca_type.png", pca.cca$x, subset=pca.retain, main="CCA", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_cca_batch.png", pca.cca$x, subset=pca.retain, main="CCA", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.cca)
+gc()
+```
+
+## Using their normalized values
+
+Or we just give in and use their values.
+
+```{r}
+SeuA <- CreateSeuratObject(counts(sceA))
+SeuF <- CreateSeuratObject(counts(sceF))
+SeuA@meta.data$group <- "group1"
+SeuF@meta.data$group <- "group2"
+
+SeuA <- NormalizeData(SeuA)
+SeuF <- NormalizeData(SeuF)
+SeuA <- ScaleData(SeuA)
+SeuF <- ScaleData(SeuF)
+Y <- RunCCA(SeuF, SeuA, genes.use=rownames(sceA))
+suppressWarnings(Y <- AlignSubspace(Y, grouping.var="group", dims.align=1:20))
+
+t.cca <- Y@dr$cca.aligned@cell.embeddings
+```
+
+Generating a t-SNE plot.
+
+```{r}
+set.seed(0)
+tsne.cca2 <- Rtsne(t.cca, perplexity = 90, pca=FALSE)
+plotFUN("results/tsne_cca2_type.png", tsne.cca2$Y, main="CCA native", xlab="tSNE 1",ylab="tSNE 2")
+plotFUNb("results/tsne_cca2_batch.png", tsne.cca2$Y, main="CCA native", xlab="tSNE 1",ylab="tSNE 2")
+```
+
+Generating a PCA plot.
+
+```{r}
+pca.cca2 <- runPCA(t.cca[pca.retain,], rank=2, BSPARAM=IrlbaParam())
+plotFUN("results/pca_cca2_type.png", pca.cca2$x, subset=pca.retain, main="CCA native", xlab="PC 1",ylab="PC 2")
+plotFUNb("results/pca_cca2_batch.png", pca.cca2$x, subset=pca.retain, main="CCA native", xlab="PC 1",ylab="PC 2")
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(t.cca)
+gc()
+```
+
+# Finishing up
+
+Making the legend (using PDF for better resolution).
+
+```{r}
+pdf(file="results/legend.pdf", width=7, height=7)
+plot(0,0,type="n", bty="n", axes=FALSE, xlab="", ylab="")
+legend(x=-1, y=1, legend=names(color.legendF), pch=21, cex=2.5, col="black", pt.bg=color.legendF, bty="n")
+legend(x=0, y=1, legend=names(color.legendA)[1:3], pch=21, cex=2.5, col="black", pt.bg=color.legendA[1:3], bty="n")
+dev.off()
+```
+
+Printing the session information.
+
+```{r}
+sessionInfo()
+```
+
