@@ -1,0 +1,211 @@
+---
+title: "Data preparation for the haematopoiesis analysis"
+author: "Aaron Lun, based on code by Laleh Haghverdi and Michael Morgan"
+date: "Revised: 27 February 2019"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    fig_caption: no
+---
+
+```{r, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+library(BiocStyle)
+```
+
+# Overview
+
+This script prepares data for the haematopoiesis batch correction analysis.
+We'll be storing data using the `r Biocpkg("BiocFileCache")` package to avoid re-downloading files more than once.
+We also set the seed in preparation for any randomized algorithms.
+
+```{r}
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+set.seed(123456)
+```
+
+# Processing the Nestorowa data set
+
+We read in the counts from the [Nestorowa _et al._ (2016)](https://doi.org/10.1182/blood-2016-05-716480) study.
+We use `readSparseCounts` to preserve the sparsity of the data:
+
+```{r}
+library(scater)
+fname.F <- bfcrpath(bfc, 
+    "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/suppl/GSE81682_HTSeq_counts.txt.gz")
+dataF <- readSparseCounts(fname.F)
+```
+
+We construct a `SingleCellExperiment` object:
+
+```{r}
+library(SingleCellExperiment)
+sceF <- SingleCellExperiment(list(counts=dataF))
+sceF <- sceF[!grepl("^_", rownames(sceF)),]
+sceF <- sceF[!grepl("^ERCC-", rownames(sceF)),] # removing spike-ins completely.
+dim(sceF)
+```
+
+We load in the metadata to specify the type of each cell.
+
+```{r}
+meta.fname <- bfcrpath(bfc, 
+    "http://blood.stemcells.cam.ac.uk/data/all_cell_types.txt")
+metaF <- read.table(meta.fname, stringsAsFactors = FALSE, header=TRUE, check.names=FALSE)
+metainds <- match(colnames(dataF), rownames(metaF))
+
+# This will contain NA's... which is okay, at this point, to preserve length.
+metaF <- metaF[metainds,] 
+head(metaF)
+```
+
+We actually define the cell type, which requires some work as some cells have multiple annotations.
+
+```{r}
+metatypeF <- rep("other", nrow(metaF))
+for (col in rev(colnames(metaF))) { # reverse, so earlier columns end up overwriting later ones.
+    chosen <- metaF[,col]==1
+    metatypeF[chosen] <- sub("[0-9]?_.*", "", col)
+}
+metatypeF[metatypeF=="ESLAM"] <- "HSPC"
+```
+
+If cell type metadata is missing, we fill it in using information from the cell sorting label.
+
+```{r}
+missing.meta <- is.na(metainds)
+metatypeF[missing.meta] <- sub("_.*", "", colnames(dataF)[missing.meta])
+metatypeF[metatypeF=="LT-HSC"] <- "LTHSC"
+metatypeF[metatypeF=="Prog"] <- "other"
+```
+
+This is added to our `SingleCellExperiment` object:
+
+```{r}
+sceF$CellType <- metatypeF
+table(metatypeF)
+```
+
+We perform size factor normalization within this data set.
+Preclustering:
+
+```{r}
+library(scran)
+library(BiocSingular)
+clustF <- quickCluster(sceF, use.ranks=FALSE, BSPARAM=IrlbaParam())
+table(clustF) 
+```
+
+... and computing the size factors per cell:
+
+```{r}
+sceF <- computeSumFactors(sceF, cluster=clustF)
+summary(sizeFactors(sceF))    
+plot(Matrix::colSums(counts(sceF)), sizeFactors(sceF), log="xy",
+    xlab="Library sizes", ylab="Size factors")
+```
+
+```{r, echo=FALSE, results="hide"}
+# Cleaning up memory.
+gc() 
+```
+
+# Processing the Paul data set
+
+We read in the counts from the [Paul _et al._ (2015)](https://doi.org/10.1016/j.cell.2015.11.013) study.
+
+```{r}
+fname.A <- bfcrpath(bfc, 
+    "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE72nnn/GSE72857/suppl/GSE72857_umitab.txt.gz")
+dataA <- readSparseCounts(fname.A, quote='"')
+sceA <- SingleCellExperiment(list(counts=dataA))
+dim(sceA)
+```
+
+We managed to get some metadata about cell types directly from the authors.
+We subset to those cells that are in the metadata:
+
+```{r}
+map.fname <- bfcrpath(bfc, 
+    "https://raw.githubusercontent.com/MarioniLab/MNN2017/master/Haematopoiesis/MAP.csv")
+metaA <- read.csv2(map.fname, sep=",", stringsAsFactors = FALSE, head=TRUE, row.names=1)
+metainds <- match(rownames(metaA), colnames(sceA))
+sceA <- sceA[,metainds]
+ncol(sceA)
+```
+
+We organize the cell type labels:
+
+```{r}
+metatypeA <- character(nrow(metaA))
+metatypeA[metaA[,1]<7] <- "ERY"
+metatypeA[metaA[,1]>6 & metaA[,1]<12] <- "CMP"
+metatypeA[metaA[,1]>11] <- "GMP"
+sceA$CellType <- metatypeA
+table(metatypeA)
+```
+
+And we perform size factor normalization within this data set.
+
+```{r}
+clustA <- quickCluster(sceA, use.ranks=FALSE, BSPARAM=IrlbaParam(), min.mean=0.1)
+table(clustA) 
+sceA <- computeSumFactors(sceA, cluster=clustA, min.mean=0.1)
+summary(sizeFactors(sceA))    
+plot(Matrix::colSums(counts(sceA)), sizeFactors(sceA), log="xy",
+    xlab="Library sizes", ylab="Size factors")
+```
+
+```{r, echo=FALSE, results="hide"}
+# Cleaning up memory.
+gc()
+```
+
+# Standardizing gene sets across batches
+
+The Paul data set uses a rather inconvenient annotation, so this requires some work to determine their Ensembl IDs.
+
+```{r}
+library(org.Mm.eg.db)
+anno <- select(org.Mm.eg.db, keys=keys(org.Mm.eg.db),
+    keytype="ENTREZID", column=c("ENSEMBL", "SYMBOL"))
+
+# Determining which subnames exist in the annotation.
+individual.names <- strsplit(rownames(sceA), ";")
+row.number <- rep(seq_along(individual.names), lengths(individual.names))
+individual.names <- unlist(individual.names)    
+
+ens.id <- anno$ENSEMBL[match(individual.names, anno$SYMBOL)]
+has.ens <- !is.na(ens.id)
+ens.id <- ens.id[has.ens]
+row.number <- row.number[has.ens]
+
+# Assigning them back to the original rows.
+final.name <- ens.id[match(seq_len(nrow(sceA)), row.number)]
+head(final.name)
+```
+
+We discard rows without annotation.
+
+```{r}
+keep <- !is.na(final.name)
+sceA <- sceA[keep,]
+rownames(sceA) <- final.name[keep]
+summary(keep)
+```
+
+# Finishing up
+
+We save the datasets to file:
+
+```{r}
+saveRDS(sceA, file="haem_data_A.rds")
+saveRDS(sceF, file="haem_data_F.rds")
+```
+
+... and we report the session information for posterity:
+
+```{r}
+sessionInfo()
+``` 
