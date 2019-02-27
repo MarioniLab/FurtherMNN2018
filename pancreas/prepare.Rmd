@@ -1,0 +1,556 @@
+---
+title: "Data preparation for the pancreas analysis"
+author: "Aaron Lun, based on code by Laleh Haghverdi and Michael Morgan"
+date: "Revised: 27 February 2019"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    fig_caption: no
+---
+
+
+```{r, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+library(BiocStyle)
+```
+    
+# Overview
+
+This script prepares data for the pancreas batch correction analysis.
+We'll be storing data using the `r Biocpkg("BiocFileCache")` package to avoid re-downloading files more than once.
+We also set the seed in preparation for any randomized algorithms.
+
+```{r} 
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+set.seed(10000)
+```
+
+# Processing GSE81076
+
+## Reading in the data
+
+This uses data from the [Grun _et al._ (2016)](https://doi.org/10.1016/j.stem.2016.05.010) study.
+First, we download and read in the counts.
+
+```{r}
+library(scater)
+gse81076 <- bfcrpath(bfc, 
+    "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81076/suppl/GSE81076%5FD2%5F3%5F7%5F10%5F17%2Etxt%2Egz")
+gse81076.df <- readSparseCounts(gse81076)
+dim(gse81076.df)    
+```
+
+We reconstruct the meta data from the cell names.
+
+```{r}
+plate.id <- sub("_.*", "", colnames(gse81076.df))
+donor.id <- sub("(D[0-9]{1,2}).*", "\\1", plate.id)
+gse81076.meta <- data.frame(Donor = donor.id, Plate=plate.id, Protocol="CELseq", Study="GSE81076")
+table(plate.id, donor.id)
+```
+
+We remove superfluous suffixes from gene IDs.
+
+```{r}
+gene.symbols <- sub("__chr([0-9XYM]+)", "", rownames(gse81076.df))
+new.names <- uniquifyFeatureNames(seq_len(nrow(gse81076.df)), gene.symbols)
+rownames(gse81076.df) <- new.names
+head(new.names)
+```
+
+We create a `SingleCellExperiment` object containing the counts and associated metadata.
+
+```{r}
+library(SingleCellExperiment)
+sce.gse81076 <- SingleCellExperiment(list(counts=gse81076.df), 
+    colData=gse81076.meta, rowData=DataFrame(Symbol=gene.symbols))
+isSpike(sce.gse81076, "ERCC") <- grep("^ERCC-[0-9]*$", rownames(sce.gse81076))
+sce.gse81076
+```
+
+## Quality control and normalization
+
+We remove low-quality cells.
+
+```{r}
+sce.gse81076 <- calculateQCMetrics(sce.gse81076, compact=TRUE)
+qc.mat <- cbind(
+    NFeatures=isOutlier(sce.gse81076$scater_qc$all$total_features_by_counts, log=TRUE, type="lower", nmads=3),
+    LibSize=isOutlier(sce.gse81076$scater_qc$all$total_counts, log=TRUE, type="lower", nmads=3),
+    SpikePct=isOutlier(sce.gse81076$scater_qc$feature_control_ERCC$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat, na.rm=TRUE)
+discard <- rowSums(qc.mat, na.rm=TRUE) > 0
+sce.gse81076 <- sce.gse81076[,!discard]
+summary(discard)
+```
+
+We compute size factors for endogenous genes with pre-clustering and deconvolution.
+
+```{r}
+library(scran)
+library(BiocSingular)
+clusters <- quickCluster(sce.gse81076, min.mean=0.1, 
+    use.ranks=FALSE, BSPARAM=IrlbaParam())
+table(clusters)
+sce.gse81076 <- computeSumFactors(sce.gse81076, clusters=clusters, min.mean=0.1)
+summary(sizeFactors(sce.gse81076))
+plot(sce.gse81076$scater_qc$all$total_counts, sizeFactors(sce.gse81076), log="xy",
+    xlab="Library size", ylab="Size factors")
+```
+
+We also compute size factors for the spike-in transcripts.
+
+```{r}
+sce.gse81076 <- computeSpikeFactors(sce.gse81076, general.use=FALSE)
+summary(sizeFactors(sce.gse81076, "ERCC"))
+```
+
+Finally, we compute log-transformed normalized expression values and save these to file.
+
+```{r}
+sce.gse81076 <- normalize(sce.gse81076)
+saveRDS(file="sce.gse81076.rds", sce.gse81076)    
+```
+
+## Modelling variability
+
+We block on the plate of origin for each cell.
+This doesn't really matter, because for the purposes of this analysis, we won't be correcting within each data set here.
+Real applications would probably need to perform batch correction across donors or plates, but this would be too much effort here.
+
+```{r}
+fit <- trendVar(sce.gse81076, block=sce.gse81076$Plate)
+dec <- decomposeVar(sce.gse81076, fit)
+plot(dec$mean, dec$total)
+points(fit$means, fit$vars, col="red")
+curve(fit$trend(x), col="dodgerblue", add=TRUE)
+```
+
+We save these to file as well.
+
+```{r}
+saveRDS(file="dec.gse81076.rds", dec)
+```
+
+```{r, echo=FALSE, results="hide"}
+rm(list=ls())
+gc()
+```
+
+# Processing GSE85241
+
+## Reading in data
+
+This uses data from the [Muraro _et al._ (2016)](https://doi.org/10.1016/j.cels.2016.09.002) study.
+First, we download and read in the counts.
+
+```{r}
+bfc <- BiocFileCache(ask=FALSE)    
+gse85241 <- bfcrpath(bfc, 
+    "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE85nnn/GSE85241/suppl/GSE85241%5Fcellsystems%5Fdataset%5F4donors%5Fupdated%2Ecsv%2Egz")
+gse85241.df <- readSparseCounts(gse85241, quote='"')
+dim(gse85241.df)
+```
+
+We construct the metadata from the cell names.
+
+```{r}
+plate.id <- sub("_.*", "", colnames(gse85241.df))
+donor.id <- sub("-.*", "", plate.id)
+gse85241.meta <- data.frame(Donor = donor.id, Plate=plate.id, Protocol="CELseq2", Study="GSE85241")
+table(plate.id, donor.id)
+```
+
+We remove superfluous suffixes from gene IDs.
+
+```{r}
+gene.symbols <- sub("__chr([0-9XYM]+)", "", rownames(gse85241.df))
+new.names <- uniquifyFeatureNames(seq_len(nrow(gse85241.df)), gene.symbols)
+rownames(gse85241.df) <- new.names
+head(new.names)
+```
+
+We create a SingleCellExperiment object.
+
+```{r}
+sce.gse85241 <- SingleCellExperiment(list(counts=gse85241.df), 
+    colData=gse85241.meta, rowData=DataFrame(Symbol=gene.symbols))
+isSpike(sce.gse85241, "ERCC") <- grep("^ERCC-[0-9]*$", rownames(sce.gse85241))
+sce.gse85241
+```
+
+## Quality control and normalization
+
+We remove low-quality cells.
+
+```{r}
+sce.gse85241 <- calculateQCMetrics(sce.gse85241, compact=TRUE)
+qc.mat <- cbind(
+    NFeatures=isOutlier(sce.gse85241$scater_qc$all$total_features_by_counts, log=TRUE, type="lower", nmads=3),
+    LibSize=isOutlier(sce.gse85241$scater_qc$all$total_counts, log=TRUE, type="lower", nmads=3),
+    SpikePct=isOutlier(sce.gse85241$scater_qc$feature_control_ERCC$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat)
+discard <- rowSums(qc.mat) > 0
+sce.gse85241 <- sce.gse85241[,!discard]
+summary(discard)
+```
+
+We compute normalization factors using preclustering and deconvolution.
+
+```{r}
+clusters <- quickCluster(sce.gse85241, min.mean=0.1, use.ranks=FALSE,
+    BSPARAM=IrlbaParam())
+table(clusters)
+sce.gse85241 <- computeSumFactors(sce.gse85241, clusters=clusters, min.mean=0.1)
+summary(sizeFactors(sce.gse85241))
+plot(sce.gse85241$scater_qc$all$total_counts, sizeFactors(sce.gse85241), log="xy",
+    xlab="Library size", ylab="Size factors")
+```
+
+We also compute size factors for the spike-in transcripts.
+
+```{r}
+sce.gse85241 <- computeSpikeFactors(sce.gse85241, general.use=FALSE)
+summary(sizeFactors(sce.gse85241, "ERCC"))
+```
+
+Finally, we compute log-transformed normalized expression values and save these to file.
+
+```{r}
+sce.gse85241 <- normalize(sce.gse85241)
+saveRDS(file="sce.gse85241.rds", sce.gse85241)
+```
+
+## Modelling variability
+
+Using standard methods to model variability, blocking on the plate of origin.
+
+```{r}
+fit <- trendVar(sce.gse85241, block=sce.gse85241$Plate)
+dec <- decomposeVar(sce.gse85241, fit)
+plot(dec$mean, dec$total)
+points(fit$means, fit$vars, col="red")
+curve(fit$trend(x), col="dodgerblue", add=TRUE)
+```
+
+Saving the results to file.
+
+```{r}
+saveRDS(file="dec.gse85241.rds", dec)
+```
+
+```{r, echo=FALSE, results="hide"}
+# Clear environment and invoke garbage collector
+rm(list=ls())
+gc()
+```
+
+# Processing GSE86473
+
+## Reading in data
+
+Here we use data from the [Lawlor _et al._ (2017)](https://dx.doi.org/10.1101%2Fgr.212720.116) study.
+The raw/processed count table was not available for download from GEO for this data set.
+Instead, data were generated by mapping the original FASTQ files to mm10, then using `featureCounts` to quantify against mm10 Ensembl annotation v86.
+
+```{r}
+bfc <- BiocFileCache(ask=FALSE)    
+host.path <- file.path("https://jmlab-gitlab.cruk.cam.ac.uk/publications/MNN2017-DataFiles",
+    "raw/4d649e8865cb2b924b61f6bd3f908865dfe0f560/GSE86473/")
+alpha <- bfcrpath(bfc, file.path(host.path, 'alpha-feature_counts.tsv.gz'))
+beta <- bfcrpath(bfc, file.path(host.path, 'beta-feature_counts.tsv.gz'))
+delta <- bfcrpath(bfc, file.path(host.path, 'delta-feature_counts.tsv.gz'))
+pp <- bfcrpath(bfc, file.path(host.path, 'PP-feature_counts.tsv.gz'))
+
+alpha.df <- readSparseCounts(alpha)
+beta.df <- readSparseCounts(beta)
+delta.df <- readSparseCounts(delta)
+pp.df <- readSparseCounts(pp)
+
+# Checking genes are in the same order.
+stopifnot(identical(rownames(alpha.df), rownames(beta.df)))
+stopifnot(identical(rownames(alpha.df), rownames(delta.df)))
+stopifnot(identical(rownames(alpha.df), rownames(pp.df)))
+
+rbind(Alpha=dim(alpha.df), Beta=dim(beta.df), Delta=dim(delta.df), PP=dim(pp.df))
+```
+
+We combine the matrices and clean up row and column names. 
+
+```{r}
+gse86473.df <- cbind(alpha.df, beta.df, delta.df, pp.df)
+rownames(gse86473.df) <- sub("ERCC\\.", "ERCC-", rownames(gse86473.df))
+
+samp.names <- sub("\\.dedup$", "", colnames(gse86473.df))
+samp.names <- sub(".star$", "", samp.names) 
+colnames(gse86473.df) <- samp.names
+```
+
+We load in the metadata.
+
+```{r}
+meta.fname <- bfcrpath(bfc, file.path(host.path, 'experimental_design.tsv'))
+gse86473.meta <- read.delim(meta.fname, stringsAsFactors=FALSE)
+stopifnot(identical(sort(colnames(gse86473.df)), sort(gse86473.meta$Sample)))
+gse86473.meta <- gse86473.meta[match(colnames(gse86473.df), gse86473.meta$Sample),]
+
+gse86473.meta$Study <- "GSE86473"
+gse86473.meta$CellType <- paste(toupper(substr(gse86473.meta$CellType, 1, 1)),
+    substring(gse86473.meta$CellType, 2), sep="")
+head(gse86473.meta)
+```
+
+Pulling out gene symbols.
+
+```{r}
+library(EnsDb.Hsapiens.v86)
+symb <- mapIds(EnsDb.Hsapiens.v86, keys=rownames(gse86473.df), 
+    keytype="GENEID", column="SYMBOL")
+head(symb)
+```
+
+Finally, creating a SingleCellExperiment object.
+
+```{r}
+sce.gse86473 <- SingleCellExperiment(list(counts=gse86473.df), 
+    colData=gse86473.meta, rowData=DataFrame(Symbol=symb))
+isSpike(sce.gse86473, "ERCC") <- grep("^ERCC-", rownames(sce.gse86473))
+sce.gse86473
+```
+
+## Quality control and normalization
+
+We remove low-quality cells.
+
+```{r}
+sce.gse86473 <- calculateQCMetrics(sce.gse86473, compact=TRUE)
+qc.mat <- cbind(
+    NFeatures=isOutlier(sce.gse86473$scater_qc$all$total_features_by_counts, log=TRUE, type="lower", nmads=3),
+    LibSize=isOutlier(sce.gse86473$scater_qc$all$total_counts, log=TRUE, type="lower", nmads=3),
+    SpikePct=isOutlier(sce.gse86473$scater_qc$feature_control_ERCC$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat)
+discard <- rowMeans(qc.mat) > 0
+sce.gse86473 <- sce.gse86473[,!discard]
+summary(discard)
+```
+
+Computing normalization factors with deconvolution and clustering.
+We don't bother setting `min.mean` here as we're dealing with read count data.
+
+```{r}
+clusters <- quickCluster(sce.gse86473, use.ranks=FALSE, BSPARAM=IrlbaParam())
+table(clusters)
+sce.gse86473 <- computeSumFactors(sce.gse86473, clusters=clusters)
+summary(sizeFactors(sce.gse86473))
+plot(sce.gse86473$scater_qc$all$total_counts, sizeFactors(sce.gse86473), log="xy",
+    xlab="Library size", ylab="Size factors")
+```
+
+There's no need for spike-in normalization, as there are actually counts for any of the spike-in transcripts.
+So we just skip this and go straight to computing the log-expression values.
+
+```{r}
+# Ignore warnings due to no spike-in size factors.
+suppressWarnings(sce.gse86473 <- normalize(sce.gse86473))
+
+saveRDS(file="sce.gse86473.rds", sce.gse86473)
+```
+
+## Detect highly variable genes
+    
+There's nothing obvious to block on, unfortunately, and there's no spike-ins, so we'll just have to do the best we can.
+
+```{r}
+fit <- trendVar(sce.gse86473, use.spikes=FALSE, loess.args=list(span=0.05))
+dec <- decomposeVar(sce.gse86473, fit)
+plot(fit$mean, fit$var)
+curve(fit$trend(x), col="dodgerblue", add=TRUE)
+```
+
+We save the results to file.
+
+```{r}
+saveRDS(file="dec.gse86473.rds", dec)
+```
+
+```{r, echo=FALSE, results="hide"}
+# Clear environment and invoke garbage collector.
+rm(list=ls())
+gc()
+```
+
+# Processing E-MTAB-5061
+
+## Reading in the data
+
+This uses data from the [Segerstolpe _et al._ (2016)](https://dx.doi.org/10.1016%2Fj.cmet.2016.08.020) study.
+First we download the count table:
+
+```{r}
+bfc <- BiocFileCache(ask=FALSE)    
+emat <- bfcrpath(bfc, 
+    "https://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-5061/files/E-MTAB-5061.processed.1.zip")
+```
+
+The count table is rather complex:
+
+- First 2 columns are gene symbol and NCBI ID.
+- Next `X` columns are the RPKMs.
+- Remaining `X` columns are the counts.
+
+The column names specify the cells, so we can start with that:
+
+```{r}
+col.names <- read.table(unz(emat, "pancreas_refseq_rpkms_counts_3514sc.txt"), 
+    header=FALSE, sep="\t", stringsAsFactors=FALSE, comment.char="", nrows = 1)[,-1]
+ncells <- length(col.names)
+
+what <- vector("list", ncells*2 + 2)
+what[[1]] <- "character"
+what[seq_len(ncells) + ncells + 2] <- "integer"
+```
+
+We then read in the counts only:
+
+```{r}
+emtab.df <- read.table(unz(emat, "pancreas_refseq_rpkms_counts_3514sc.txt"), 
+    header=FALSE, sep="\t", stringsAsFactors=FALSE, colClasses=what, skip=1)
+emtab.df <- emtab.df[!duplicated(emtab.df[,1]),]
+row.names <- emtab.df[,1]
+emtab.df <- emtab.df[,-1]
+
+rownames(emtab.df) <- row.names
+colnames(emtab.df) <- col.names
+dim(emtab.df)
+```
+
+We read in the metadata and constructing the appropriate meta data columns, i.e. donor, plate, protocol, study.
+
+```{r}
+meta.fname <- bfcrpath(bfc, 
+    "https://www.ebi.ac.uk/arrayexpress/files/E-MTAB-5061/E-MTAB-5061.sdrf.txt")
+emtab.sdrf <- read.delim(meta.fname, stringsAsFactors=FALSE)
+stopifnot(identical(sort(emtab.sdrf$Source.Name), sort(colnames(emtab.df))))    
+emtab.sdrf <- emtab.sdrf[match(colnames(emtab.df), emtab.sdrf$Source.Name),]
+
+emtab.meta <- emtab.sdrf[, c("Assay.Name", 
+    "Characteristics.cell.type.", "Characteristics.individual.",
+    "Characteristics.single.cell.well.quality.")]
+colnames(emtab.meta) <- c("Sample", "CellType", "Donor", "Quality")
+emtab.meta$Study <- "E-MTAB-5061"
+emtab.meta$Protocol <- "SmartSeq2"
+head(emtab.meta)
+```
+
+Some editing the cell type labels is necessary.
+
+```{r}
+emtab.meta$CellType <- gsub(" cell", "", emtab.meta$CellType)
+emtab.meta$CellType <- paste(toupper(substr(emtab.meta$CellType, 1, 1)),
+    substring(emtab.meta$CellType, 2), sep="")
+table(emtab.meta$CellType)
+```
+
+Finally, we create a `SingleCellExperiment` object.
+
+```{r}
+sce.emtab <- SingleCellExperiment(list(counts=as.matrix(emtab.df)), 
+    colData=emtab.meta)
+isSpike(sce.emtab, "ERCC") <- grep("^ERCC_", rownames(sce.emtab))
+sce.emtab
+```
+
+## Quality control and normalization
+
+We remove the marked low quality cells
+
+```{r}
+low.qual <- sce.emtab$Quality == "low quality cell"
+sce.emtab <- sce.emtab[,!low.qual]
+summary(low.qual)
+```
+
+We also remove more low quality cells.
+
+```{r}
+sce.emtab <- calculateQCMetrics(sce.emtab, compact=TRUE)
+qc.mat <- cbind(
+    NFeatures=isOutlier(sce.emtab$scater_qc$all$total_features_by_counts, log=TRUE, type="lower", nmads=3),
+    LibSize=isOutlier(sce.emtab$scater_qc$all$total_counts, log=TRUE, type="lower", nmads=3),
+    SpikePct=isOutlier(sce.emtab$scater_qc$feature_control_ERCC$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat)
+discard <- rowMeans(qc.mat) > 0
+sce.emtab <- sce.emtab[,!discard]
+summary(discard)
+```
+
+We compute size factors using the deconvolution and preclustering approach.
+
+```{r}
+clusters <- quickCluster(sce.emtab, use.ranks=FALSE, BSPARAM=IrlbaParam())
+table(clusters)
+sce.emtab <- computeSumFactors(sce.emtab, clusters=clusters)
+summary(sizeFactors(sce.emtab))
+plot(sce.emtab$scater_qc$all$total_counts, sizeFactors(sce.emtab), log="xy",
+    xlab="Library size", ylab="Size factors")
+```
+
+We also compute size factors for the spike-in counts.
+
+```{r}
+sce.emtab <- computeSpikeFactors(sce.emtab, general.use=FALSE)
+summary(sizeFactors(sce.emtab, "ERCC"))
+```
+
+Note that some cells have no spike-in counts, so `normalize` will fail. 
+We renormalize later anyway.
+
+```{r}
+saveRDS(file="sce.emtab5601.rds", sce.emtab)
+```
+
+## Modelling variability
+
+Here, we have to:
+
+- block on Donor, as Smart-seq2 variance is highly variable.
+- remove cells with no spike-ins, as they are not useful for modelling technical noise.
+- remove cells from Donor AZ, which has very low spike-in concentrations.
+
+```{r}
+for.hvg <- sce.emtab[,sizeFactors(sce.emtab, "ERCC") > 0 & sce.emtab$Donor!="AZ"]
+for.hvg <- multiBlockNorm(for.hvg, for.hvg$Donor) 
+comb.out <- multiBlockVar(for.hvg, for.hvg$Donor)
+```
+
+We create a series of plots:
+
+```{r, fig.asp=2}
+all.donors <- unique(for.hvg$Donor)
+par(mfrow=c(ceiling(length(all.donors)/3),3))
+is.spike <- isSpike(for.hvg)
+for (plate in all.donors) {
+    cur.out <- comb.out$per.block[[plate]]
+    plot(cur.out$mean, cur.out$total, pch=16, cex=0.6, xlab="Mean log-expression", 
+         ylab="Variance of log-expression", main=plate)
+    curve(metadata(cur.out)$trend(x), col="dodgerblue", lwd=2, add=TRUE)
+    points(cur.out$mean[is.spike], cur.out$total[is.spike], col="red", pch=16)
+}
+```
+
+We save these results to file.
+
+```{r}
+saveRDS(file="dec.emtab5601.rds", comb.out)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
