@@ -233,3 +233,8 @@ However, this is likely to degrade the performance of the correction in the gene
 One can see if there is any differential expression across conditions that reflect the differences in the two populations along the biological subspace.
 This usually requires replication to distinguish between the random batch effect and genuine biological differences.
 
+An interesting consequence of the orthogonalization step is that `fastMNN()` may not work correctly in the _absence_ of a batch effect.
+In such cases, the batch vector will be of near-zero length and point in some random direction such that orthogonalization may end up removing geniune biology.
+This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place.
+In practice, this is unlikely to be a major problem as a random vector is still more likely than not to be orthogonal to the biological subspace;
+and if this is not the case, we should be able to observe a large loss of variance that indicates that `fastMNN()` should not be run.
