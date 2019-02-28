@@ -91,8 +91,7 @@ We compute size factors for endogenous genes with pre-clustering and deconvoluti
 ```{r}
 library(scran)
 library(BiocSingular)
-clusters <- quickCluster(sce.gse81076, min.mean=0.1, 
-    use.ranks=FALSE, BSPARAM=IrlbaParam())
+clusters <- quickCluster(sce.gse81076, use.ranks=FALSE, BSPARAM=IrlbaParam())
 table(clusters)
 sce.gse81076 <- computeSumFactors(sce.gse81076, clusters=clusters, min.mean=0.1)
 summary(sizeFactors(sce.gse81076))
@@ -201,8 +200,7 @@ summary(discard)
 We compute normalization factors using preclustering and deconvolution.
 
 ```{r}
-clusters <- quickCluster(sce.gse85241, min.mean=0.1, use.ranks=FALSE,
-    BSPARAM=IrlbaParam())
+clusters <- quickCluster(sce.gse85241, use.ranks=FALSE, BSPARAM=IrlbaParam())
 table(clusters)
 sce.gse85241 <- computeSumFactors(sce.gse85241, clusters=clusters, min.mean=0.1)
 summary(sizeFactors(sce.gse85241))

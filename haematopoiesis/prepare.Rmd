@@ -149,7 +149,7 @@ table(metatypeA)
 And we perform size factor normalization within this data set.
 
 ```{r}
-clustA <- quickCluster(sceA, use.ranks=FALSE, BSPARAM=IrlbaParam(), min.mean=0.1)
+clustA <- quickCluster(sceA, use.ranks=FALSE, BSPARAM=IrlbaParam())
 table(clustA) 
 sceA <- computeSumFactors(sceA, cluster=clustA, min.mean=0.1)
 summary(sizeFactors(sceA))    
