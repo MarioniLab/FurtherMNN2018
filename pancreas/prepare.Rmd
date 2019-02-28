@@ -312,13 +312,22 @@ symb <- mapIds(EnsDb.Hsapiens.v86, keys=rownames(gse86473.df),
 head(symb)
 ```
 
-Finally, creating a SingleCellExperiment object.
+Then creating a SingleCellExperiment object.
 
 ```{r}
 sce.gse86473 <- SingleCellExperiment(list(counts=gse86473.df), 
     colData=gse86473.meta, rowData=DataFrame(Symbol=symb))
 isSpike(sce.gse86473, "ERCC") <- grep("^ERCC-", rownames(sce.gse86473))
 sce.gse86473
+```
+
+We replace the row names with the gene symbols for consistency with the other batches.
+
+```{r}
+rowData(sce.gse86473)$Ensembl <- rownames(sce.gse86473)
+rownames(sce.gse86473) <- uniquifyFeatureNames(rownames(sce.gse86473), 
+    rowData(sce.gse86473)$Symbol)
+head(rownames(sce.gse86473))
 ```
 
 ## Quality control and normalization
