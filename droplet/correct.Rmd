@@ -1,36 +1,75 @@
-library(scran)
-library(Rtsne)
-dir.create("results", showWarnings=FALSE)
+---
+title: "Batch correction for the droplet data"
+author: "Aaron Lun, based on code by Laleh Haghverdi and Michael Morgan"
+date: "Revised: 28 February 2019"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    fig_caption: no
+---
 
-# Normalizing both batches to the same scale.
+```{r, echo=FALSE}
+knitr::opts_chunk$set(error=FALSE, warning=FALSE, message=FALSE)
+library(BiocStyle)
+library(BiocParallel)
+register(SerialParam())
+```
 
+# Overview
+
+Here we test out `fastMNN` on the droplet data.
+In the interests of time, we won't bother testing the others.
+First, we normalize both batches to the same scale.
+
+```{r}
+library(SingleCellExperiment)
 sce.68 <- readRDS("sce.pbmc68k.rds")
 sce.4 <- readRDS("sce.t4k.rds")
 universe <- intersect(rownames(sce.68), rownames(sce.4))
 
+library(batchelor)
 normed <- multiBatchNorm(sce.68[universe,], sce.4[universe,])
 sce.68 <- normed[[1]]
 sce.4 <- normed[[2]]
+```
 
-# Taking the top 5000 genes with the largest biological components.
+Taking all genes with positive biological components.
+
+```{r}
 dec.68 <- readRDS("dec.pbmc68k.rds")
 dec.4 <- readRDS("dec.t4k.rds")
 combined <- (dec.68[universe,"bio"] + dec.4[universe,"bio"])/2
-to.use <- universe[order(combined, decreasing=TRUE)[1:5000]]
+to.use <- combined > 0
+summary(to.use)
+```
 
+Subsetting to these genes.
+
+```{r}
 sce.68 <- sce.68[to.use,]
 sce.4 <- sce.4[to.use,]
+```
 
-# Organizing colors.
+```{r, echo=FALSE, results="hide"}
+gc()
+```
+
+# Setting up the visualization
+
+Organizing colors for cell types and batches.
+
+```{r}
 batch.id <- rep(1:2, c(ncol(sce.68), ncol(sce.4)))
 batchcolor <- c("lavender", "lightcoral")[batch.id]
 
 cd3e <- c(logcounts(sce.68)["ENSG00000198851",], logcounts(sce.4)["ENSG00000198851",])
 cd3e <- pmin(cd3e, 2) # to preserve dynamic range.
 allcolors <- viridis::viridis(20)[cut(cd3e, 20)]
+```
 
-# Making a plotting function.
+Making a plotting function for each metric.
 
+```{r}
 plotFUN <- function(fname, Y, subset=NULL, ..., xlab="tSNE 1",ylab="tSNE 2",main="") {
     if (is.null(subset)) {
         subset <- seq_len(nrow(Y))
@@ -50,36 +89,57 @@ plotFUNb <- function(fname, Y, subset=NULL, ...) {
     plot(Y[,1], Y[,2], cex=2, pch=21, bg=batchcolor[subset], ...)
     dev.off()
 }
+```
 
-######################## 
-# Running it without any correction (but with a PCA, to make things manageable w.r.t. time).
+# No correction
 
+Running it without any correction (but with a PCA, to make things manageable w.r.t. time).
+
+```{r}
+library(BiocSingular)
 set.seed(1000)
-out <- scran:::.multi_pca(list(logcounts(sce.68), logcounts(sce.4)), d=50, approximate=TRUE, use.crossprod=TRUE)
+out <- multiBatchPCA(logcounts(sce.68), logcounts(sce.4), d=50, 
+    BSPARAM=IrlbaParam(deferred=TRUE))
 t.unc <- do.call(rbind, out)
+```
 
-# Generating a t-SNE plot.
+Generating a t-SNE plot.
+
+```{r}
 set.seed(0)
-tsne.unc <- Rtsne(t.unc, perplexity = 30)
+library(Rtsne)
+tsne.unc <- Rtsne(t.unc, perplexity = 30, pca=FALSE)
 plotFUN("results/tsne_unc_type.png", tsne.unc$Y, main="Uncorrected", xlab="tSNE 1",ylab="tSNE 2")
 plotFUNb("results/tsne_unc_batch.png", tsne.unc$Y, main="Uncorrected", xlab="tSNE 1",ylab="tSNE 2")
+```
 
+```{r, echo=FALSE, results="hide"}
 rm(t.unc)
 gc()
+```
 
-######################## 
-# Performing the correction with faster MNN.
+# Using fast MNN
 
+Performing the correction with faster MNN.
+
+```{r}
 set.seed(1000)
-mnn.out2 <- fastMNN(logcounts(sce.68), logcounts(sce.4), k=20, approximate=TRUE, cos.norm=TRUE)# BPPARAM=MulticoreParam(1))
-t.mnn <- mnn.out2$corrected
+mnn.out2 <- fastMNN(logcounts(sce.68), logcounts(sce.4), k=20, 
+    BSPARAM=IrlbaParam(deferred=TRUE))
+t.mnn <- reducedDim(mnn.out2)
+```
 
-# Generating a t-SNE plot.
+Generating a t-SNE plot.
+
+```{r}
 set.seed(0)
-tsne.mnn <- Rtsne(t.mnn, perplexity = 30)
+tsne.mnn <- Rtsne(t.mnn, perplexity = 30, pca=FALSE)
 plotFUN("results/tsne_mnn2_type.png", tsne.mnn$Y, main="Fast MNN", xlab="tSNE 1",ylab="tSNE 2")
 plotFUNb("results/tsne_mnn2_batch.png", tsne.mnn$Y, main="Fast MNN", xlab="tSNE 1",ylab="tSNE 2")
+```
 
-rm(t.mnn)
-gc()
+# Session information
 
+```{r}
+sessionInfo()
+```
