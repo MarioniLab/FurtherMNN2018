@@ -1,0 +1,201 @@
+---
+title: "Data preparation for the droplet analysis"
+author: "Aaron Lun, based on code by Laleh Haghverdi and Michael Morgan"
+date: "Revised: 27 February 2019"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    fig_caption: no
+---
+
+```{r, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+library(BiocStyle)
+```
+    
+# Overview
+
+This script prepares data for batch correction of droplet-based data.
+We'll be storing data using the `r Biocpkg("BiocFileCache")` package to avoid re-downloading files more than once.
+We also set the seed in preparation for any randomized algorithms.
+
+```{r}
+library(BiocFileCache)
+bfc <- BiocFileCache(ask=FALSE)    
+set.seed(1000)
+```
+
+# Processing the 68K PBMC dataset.
+
+## Loading in the data
+
+Downloading the data and reading into a `SingleCellExperiment` object.
+
+```{r}
+path.68 <- bfcrpath(bfc, 
+    "http://cf.10xgenomics.com/samples/cell-exp/1.1.0/fresh_68k_pbmc_donor_a/fresh_68k_pbmc_donor_a_filtered_gene_bc_matrices.tar.gz")
+tmp.68 <- tempfile()
+untar(path.68, exdir=tmp.68)
+
+library(DropletUtils)
+sce.68 <- read10xCounts(file.path(tmp.68, "filtered_matrices_mex/hg19/")) 
+sce.68
+```
+
+## Quality control
+
+Adding locational annotation (using a slightly off-version ensembl, but chromosome assignment shouldn't change).
+
+```{r}
+library(EnsDb.Hsapiens.v86)
+loc <- mapIds(EnsDb.Hsapiens.v86, keys=rownames(sce.68), keytype="GENEID", column="SEQNAME")
+rowData(sce.68)$Chr <- loc
+```
+
+Brief quality control.
+
+```{r}
+library(scater)
+sce.68 <- calculateQCMetrics(sce.68, compact=TRUE, feature_controls=list(Mt=which(loc=="MT")))
+qc.mat <- cbind(
+    LibSize=isOutlier(sce.68$scater_qc$all$log10_total_counts, type="lower", nmads=3),
+    NFeatures=isOutlier(sce.68$scater_qc$all$log10_total_features_by_counts, type="lower", nmads=3),
+    MitoPct=isOutlier(sce.68$scater_qc$feature_control_Mt$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat)
+discard <- rowSums(qc.mat) > 0
+sce.68 <- sce.68[,!discard]
+summary(discard)
+```
+
+## Normalization
+
+Performing normalization, breaking the problem up into smaller blocks and subclustering within them.
+
+```{r}
+library(scran)
+library(BiocSingular)
+blocks <- rep(seq_len(10), length.out=ncol(sce.68))
+clusters <- quickCluster(sce.68, block=blocks, use.ranks=FALSE,
+    BSPARAM=IrlbaParam(), block.BPPARAM=MulticoreParam(2))
+table(clusters)
+
+sce.68 <- computeSumFactors(sce.68, clusters=clusters, 
+    min.mean=0.1, BPPARAM=MulticoreParam(2))
+summary(sizeFactors(sce.68))
+plot(sce.68$scater_qc$all$total_counts, sizeFactors(sce.68), log="xy",
+    xlab="Library size", ylab="Size factors")        
+```
+
+Saving the object to file.
+
+```{r}
+saveRDS(file="sce.pbmc68k.rds", sce.68)
+```
+
+# Modelling the mean-variance trend.
+
+We don't have spike-ins, so we assume that the technical noise is Poisson-distributed.
+
+```{r}
+tmp <- normalize(sce.68) 
+tech.68 <- makeTechTrend(x=tmp)
+dec.68 <- decomposeVar(tmp, fit=list(trend=tech.68))
+plot(dec.68$mean, dec.68$total)
+curve(tech.68(x), add=TRUE, col="red")
+```
+
+We save the results to file.
+
+```{r}
+saveRDS(file="dec.pbmc68k.rds", dec.68)
+```
+
+```{r, echo=FALSE}
+# Cleaning out the memory.
+rm(list=ls())
+gc()
+```
+
+# Processing the 4K T-cell data
+
+## Reading in the data
+
+Again, downloading the data and reading into a `SingleCellExperiment` object.
+
+```{r}
+bfc <- BiocFileCache(ask=FALSE)    
+path.4 <- bfcrpath(bfc, 
+    "http://cf.10xgenomics.com/samples/cell-exp/2.1.0/t_4k/t_4k_filtered_gene_bc_matrices.tar.gz")
+tmp.4 <- tempfile()
+untar(path.4, exdir=tmp.4)
+
+sce.4 <- read10xCounts(file.path(tmp.4, "filtered_gene_bc_matrices/GRCh38/"))
+sce.4
+```
+
+## Quality control
+
+Adding locational annotation.
+
+```{r}
+loc <- mapIds(EnsDb.Hsapiens.v86, keys=rownames(sce.4), keytype="GENEID", column="SEQNAME")
+rowData(sce.4)$Chr <- loc
+```
+
+```{r}
+sce.4 <- calculateQCMetrics(sce.4, compact=TRUE, feature_controls=list(Mt=which(loc=="MT")))
+qc.mat <- cbind(
+    LibSize=isOutlier(sce.4$scater_qc$all$log10_total_counts, type="lower", nmads=3),
+    NFeatures=isOutlier(sce.4$scater_qc$all$log10_total_features_by_counts, type="lower", nmads=3),
+    MitoPct=isOutlier(sce.4$scater_qc$feature_control_Mt$pct_counts, type="higher", nmads=3)
+)
+colSums(qc.mat)
+discard <- rowSums(qc.mat) > 0
+sce.4 <- sce.4[,!discard]
+summary(discard)
+```
+
+## Performing normalization
+
+Applying deconvolution.
+Probably don't need pre-clustering if they're all T cells, but it can't hurt.
+
+```{r}
+clusters <- quickCluster(sce.4, use.ranks=FALSE, BSPARAM=IrlbaParam())
+table(clusters)
+sce.4 <- computeSumFactors(sce.4, clusters=clusters, min.mean=0.1, BPPARAM=MulticoreParam(2))
+summary(sizeFactors(sce.4))
+plot(sce.4$scater_qc$all$total_counts, sizeFactors(sce.4), log="xy",
+    xlab="Library size", ylab="Size factors")        
+```
+
+Saving the SCE to file.
+
+```{r}
+saveRDS(file="sce.t4k.rds", sce.4)
+```
+
+## Modelling the mean-variance trend
+
+Using `makeTechTrend`
+
+```{r}
+tmp <- normalize(sce.4)
+tech.4 <- makeTechTrend(x=tmp)
+dec.4 <- decomposeVar(tmp, fit=list(trend=tech.4))
+plot(dec.4$mean, dec.4$total)
+curve(tech.4(x), add=TRUE, col="red")
+```
+
+Saving the results of variance decomposition.
+
+```{r}
+saveRDS(file="dec.t4k.rds", dec.4)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```    
