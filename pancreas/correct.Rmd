@@ -160,7 +160,7 @@ We've turned down the sigma to improve mixing.
 ```{r}
 mnn.out <- mnnCorrect(logcounts(sceA), logcounts(sceB), 
     logcounts(sceC), logcounts(sceD), k=20, sigma=0.1)
-t.mnn <- as.matrix(t(do.call(cbind, mnn.out$corrected)))
+t.mnn <- t(assay(mnn.out))
 ```
 
 Generating a t-SNE plot.
