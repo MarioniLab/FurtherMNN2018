@@ -169,8 +169,14 @@ If a high percentage of variance is removed, this suggests that there is biologi
 Orthogonalization will subsequently remove this structure, which would not be appropriate.
 In this manner, we can use the percentage of variance removed as a diagnostic for the orthogonality assumptions of the MNN procedure.
 
-For applications involving correction of more than two batches, the percentage of variance lost at each merge step is computed for each individual batch making up the reference batch.
-The total percentage of variance lost for each batch is then computed by multiplying these percentages.
+Of course, what constitutes a "large" loss of variance is debatable.
+A large percentage of lost variance may be harmless (and even beneficial) if it removes uninteresting noise.
+A small percentage may be damaging if it removes a rare population.
+Nonetheless, this diagnostic provides a quick method for flagging problematic batches.
+
+If one is concerned about any loss of variation due to orthogonalization,
+we suggest comparing the merged analysis to separate analyses with individual batches.
+Loss of important variation should manifest as, e.g., co-clustering in the merged analysis of very different cells.
 
 ## Behaviour in the absence of a batch effect
 
@@ -186,7 +192,6 @@ The relative size is defined as the ratio of the L2 norm of the average correcti
 This is small if there is no batch effect as the per-pair vectors will point in different directions. 
 If large losses of variance at particular merge steps are suspected to be caused by the lack of a batch effect,
 we recommend examining the relative effect sizes and picking a threshold that allows one to skip those steps.
-A value of around 0.1 tends to be appropriate.
 
 **Comments:**
 
