@@ -172,6 +172,33 @@ In this manner, we can use the percentage of variance removed as a diagnostic fo
 For applications involving correction of more than two batches, the percentage of variance lost at each merge step is computed for each individual batch making up the reference batch.
 The total percentage of variance lost for each batch is then computed by multiplying these percentages.
 
+## Behaviour in the absence of a batch effect
+
+An interesting consequence of the orthogonalization step is that `fastMNN()` may not work correctly in the _absence_ of a batch effect.
+In such cases, the batch vector will be of near-zero length in some random direction.
+If this is parallel to the biological subspace, orthogonalization may subsequently end up removing geniune biology.
+This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place.
+In practice, this is unlikely to be a major problem as a random vector is still likely to be orthogonal to any one biological dimension.
+If this is not the case, we should be able to observe a large loss of variance that indicates that `fastMNN()` should not be run.
+
+`fastMNN()` can also be instructed to skip the correction if the relative batch effect size is below some threshold.
+The relative size is defined as the ratio of the L2 norm of the average correction vector to the expected L2 norm of the per-pair vectors.
+This is small if there is no batch effect as the per-pair vectors will point in different directions. 
+If large losses of variance at particular merge steps are suspected to be caused by the lack of a batch effect,
+we recommend examining the relative effect sizes and picking a threshold that allows one to skip those steps.
+A value of around 0.1 tends to be appropriate.
+
+**Comments:**
+
+- Another strategy would be to ask whether or not the average batch effect size is significantly greater than zero.
+However, this requires explicit distributional assumptions (e.g., i.i.d. normal) that are unlikely to be reasonable.
+We are also more likely to reject the null with more cells, eventually favouring correction even in the presence of tiny batch effects.
+In contrast, our definition of the relative effect size will simply give a more precise estimate as the number of cells increases.
+- `fastMNN()` will not skip correction by default, even though the relative effect sizes are available.
+This is because the relative effect size can be small in situations where there is a genuine batch effect
+(e.g., due to a small proportion of per-pair vectors that are very large).
+More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.
+
 # Performing the batch correction
 
 For each cell $i$ in the target batch, we identify the `k` nearest neighbouring paired cells, i.e., cells in the same batch that are involved in a MNN pair.
@@ -233,8 +260,4 @@ However, this is likely to degrade the performance of the correction in the gene
 One can see if there is any differential expression across conditions that reflect the differences in the two populations along the biological subspace.
 This usually requires replication to distinguish between the random batch effect and genuine biological differences.
 
-An interesting consequence of the orthogonalization step is that `fastMNN()` may not work correctly in the _absence_ of a batch effect.
-In such cases, the batch vector will be of near-zero length and point in some random direction such that orthogonalization may end up removing geniune biology.
-This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place.
-In practice, this is unlikely to be a major problem as a random vector is still more likely than not to be orthogonal to the biological subspace;
-and if this is not the case, we should be able to observe a large loss of variance that indicates that `fastMNN()` should not be run.
+
