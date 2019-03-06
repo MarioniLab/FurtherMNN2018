@@ -23,14 +23,8 @@ The `fastMNN()` approach is much simpler than the original `mnnCorrect()` algori
 
 If scaling normalization is only performed _within_ each batch, there may be a systematic scaling difference in the normalized expression values between batches.
 This unnecessarily adds an extra dimension to the differences between batches, which complicates later correction steps.
-
-Scaling differences are best avoided by ensuring that the size factors bring all batches to the same scale, which is the purpose of `multiBatchNorm()`.
-This function downscales all other batches to the same scale as the lowest-coverage batch prior to addition of a pseudo-count (of unity) and log-transformation.
-The use of downscaling mitigates differences in variance at low-coverage genes, by increasing the impact of the pseudo-count to shrink all log-expression values towards zero.
-
-So, ideally, one would address this problem during normalization.
-However, this is not possible if we consider `fastMNN()` in isolation with arbitrary log-expression values.
-Accurately reversing the log-transformation requires knowledge of the base of the log function and the added pseudo-count, 
+Ideally, one would address this problem during normalization (see `multiBatchNorm()` below) but this is not possible for arbitrary log-expression values.
+Correctly reversing the log-transformation requires knowledge of the base of the log function and the added pseudo-count, 
 which complicates the interface at best and may not be available at worst.
 
 Cosine normalization of the log-expression values represents the next-best solution for removing these differences between batches.
@@ -84,6 +78,26 @@ This is probably reasonable if the batch effect is not as large as the magnitude
 Of course, this is all rather academic, as one can simply change the orthogonality assumption to refer to the cosine-normalized space in the first place.
 The cosine-normalized space loses one dimension of variation relative to the un-normalized space, but both are still high-dimensional,
 so the assumption of orthogonality is still reasonable in the former.
+
+## `multiBatchNorm()` as an alternative
+
+The `multiBatchNorm()` function accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
+Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
+
+We deliberately chose to downscale all batches rather than scale all batches to the mean or median coverage.
+By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
+This suppresses batch-to-batch differences in the technical noise at low counts and improves the quality of the MNN correction.
+Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
+
+Obviously, biological variation will also experience greater shrinkage towards zero. 
+However, this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
+In fact, the loss of biological variation from increased shrinkage of high-coverage batches is correct if that variation could not have manifested in the low-coverage batches anyway.
+Low-abundance genes with no expression in low-coverage batches are not informative and should not be used to direct the correction,
+even if they are expressed and useful in high-coverage batches.
+(Of course, once the correction is performed based on informative genes, it is entirely possible to obtain corrected values for them.)
+
+In addition, technical noise at large counts is less pronounced, so reduced shrinkage is not a problem.
+We note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
 
 # Reducing dimensionality
 
@@ -240,31 +254,7 @@ Note that the PCA step is only done once at the start, though.
 
 # Further comments
 
-## Using `multiBatchNorm()`
-
-Previously, `mnnCorrect()` relied solely on the cosine normalization to adjust for differences in coverage between batches.
-This was not ideal as the cosine normalization operated on the log-space, and would not correctly adjust for scaling differences in the raw space.
-To provide better inputs to `mnnCorrect()`, `r Biocpkg("scran")` now contains the `multiBatchNorm()` function.
-This accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
-Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
-
-We deliberately chose to downscale all batches rather than scale all batches to the mean or median coverage.
-By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
-This suppresses batch-to-batch differences in the technical noise at low counts and improves the quality of the MNN correction.
-Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
-
-Obviously, biological variation will also experience greater shrinkage towards zero. 
-However, this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
-In addition, technical noise at large counts is less pronounced, so reduced shrinkage is not a problem.
-We note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
-
-## Computational performance 
-
-Using a single core, the `fastMNN()` function completes in 17 minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
+Using a single core, the `fastMNN()` function completes in several minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
 Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized.
 Memory usage is minimal through the use of the `r Biocpkg("DelayedArray")` framework, which avoids creating the merged matrix explicitly for PCA.
 The nearest neighbour search is performed using the `r Biocpkg("BiocNeighbors")` package, which provides a speed boost over conventional KD-trees for high-dimensional data (see https://github.com/LTLA/OkNN2018) and also supports parallelization.
-
-# Known limitations
-
-
