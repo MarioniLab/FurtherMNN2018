@@ -130,14 +130,36 @@ This means that it is valid to identify MNN pairs in the PC space, provided the 
 
 The use of mutually nearest neighbours is largely the same as described in the original manuscript and for `mnnCorrect()`.
 As before, MNNs will be identified between cells of the same type or state across batches, assuming that the batch effect is orthogonal.
-The choice of `k` should be driven by the minimum subpopulation size in each batch, with a default of `k=20`.
 The only modification is that nearest neighbour identification is now performed on the PC space rather than the original gene expression space.
+This is perfectly valid if one treats Euclidean distances in PC space as an approximation of the distances in gene expression space.
+
+The choice of `k` should be driven by the minimum subpopulation size in each batch, with a default of `k=20`.
+Larger `k` will improve the stability of the correction vectors and provide some robustness to non-orthogonality.
+Specifically, slight non-orthogonality can cause MNN pairs to be defined at the boundaries of the population,
+which results in incomplete merging as only the boundaries are brought into contact.
+However, too large `k` will cause MNN pairs to be identified between the incorrect populations.
+This will obviously result in incorrect merges.
 
 Of course, it is (again) possible that MNNs are incorrectly identified between cells of different type or state across batches.
 This would require the presence of unique subpopulations in each batch,
 which are closer to each other than to subpopulations that are shared across batches.
+These two distinct subpopulations (i.e., that are genuinely separated on the biological subspace) would be incorrectly merged by `fastMNN()`.
 Such a scenario seems somewhat unfortunate.
 Even with manual curation, it would be difficult to consider these subpopulations as distinct cell types in the presence of an arbitrary batch effect.
+
+**Comments:**
+
+- At first glance, this seems like an incorrect outcome, but the actual interpretation varies.
+One can imagine that the separation in the biological subspace represents a batch effect, 
+either technical in nature due to non-orthogonality or due to some uninteresting biological effect (e.g., genetics, sex, age).
+In such cases, an aggressive merge would be a desirable result.
+- If such a merge is definitely undesirable, it is possible to modify the algorithm to avoid it.
+This is achieved by only considering the component of the correction vector for each cell that is parallel to the average batch vector.
+Here, the assumption is that most cells are shared between batches and have the same batch effect - any deviations from the average vector are biological and should be preserved.
+However, this is likely to degrade the performance of the correction in the general case where there is any locality in the batch effect.
+- In any case, if the merge is undesirable and has still occurred, it is possible to recover the differences with an examination of the original expression values.
+One can see if there is any differential expression across conditions that reflect the differences in the two populations along the biological subspace.
+This usually requires replication to distinguish between the random batch effect and genuine biological differences.
 
 # Removing intra-batch variation
 
@@ -158,8 +180,9 @@ The aim is to avoid the "kissing" problem for dense subpopulations, whereby MNNs
 In such cases, subsequent correction will fail to fully merge subpopulations as the correction vectors only bring the surfaces into contact.
 By removing variation along the batch vector, we can avoid this problem as the subpopulations no longer have any "width" in either batch.
 
-That said, the use of the average batch vector assumes that the same batch effect is present at all subpopulations.
-This ignores variation in the batch effects across subpopulations, so some kissing may still be expected when this variation is present.
+That said, the use of the average batch vector assumes that the batch effect has the same direction in all subpopulations.
+This ignores variation in the batch directions across subpopulations, so some kissing may still be expected when this variation is present.
+In such cases, the only way to improve the correction is to increase `k` to allow the correct MNNs to be identified beyond the population surface.
 
 ## Estimating the variance removed
 
@@ -243,26 +266,5 @@ Memory usage is minimal through the use of the `r Biocpkg("DelayedArray")` frame
 The nearest neighbour search is performed using the `r Biocpkg("BiocNeighbors")` package, which provides a speed boost over conventional KD-trees for high-dimensional data (see https://github.com/LTLA/OkNN2018) and also supports parallelization.
 
 # Known limitations
-
-The key to the performance of any MNN correction method lies in the ability to detect correct MNNs.
-This is not always straightforward.
-When the batch effect is not orthogonal, noise in the biological subspace can cause the wrong MNNs to be identified between the "surfaces" of two cell populations.
-In such cases, orthogonalization is not effective at solving the kissing problem.
-The solution here is to increase `k` to allow the correct MNNs to be identified beyond the population surface.
-
-A more troubling case involves detection of MNNs between two unique populations in different batches, as discussed above.
-This would result in the merging of two distinct subpopulations (i.e., that are genuinely separated on the biological subspace) after batch correction.
-
-- At first glance, this seems like an incorrect outcome, but the actual interpretation varies.
-One can imagine that the separation in the biological subspace represents a batch effect, 
-either technical in nature due to non-orthogonality or due to some uninteresting biological effect (e.g., genetics, sex, age).
-In such cases, an aggressive merge would be a desirable result.
-- If such a merge is definitely undesirable, it is possible to modify the algorithm to avoid it.
-This is achieved by only considering the component of the correction vector for each cell that is parallel to the average batch vector.
-Here, the assumption is that most cells are shared between batches and have the same batch effect - any deviations from the average vector are biological and should be preserved.
-However, this is likely to degrade the performance of the correction in the general case where there is any locality in the batch effect.
-- In any case, if the merge is undesirable and has still occurred, it is possible to recover the differences with an examination of the original expression values.
-One can see if there is any differential expression across conditions that reflect the differences in the two populations along the biological subspace.
-This usually requires replication to distinguish between the random batch effect and genuine biological differences.
 
 
