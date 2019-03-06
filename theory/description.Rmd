@@ -204,6 +204,40 @@ This is because the relative effect size can be small in situations where there 
 (e.g., due to a small proportion of per-pair vectors that are very large).
 More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.
 
+## Reorthogonalization of remaining batches
+
+Orthogonalization only applies to the batches currently being merged, e.g., $A$ and $B$.
+If another batch $C$ is to be merged later, there will still be non-zero variation within $C$ along the $A\toB$ correction vector.
+This will not be removed if the correction vector for $C\to \{A, B\}$ is in a different direction.
+Thus, we would introduce an artificial difference in the variance structure among the different batches.
+
+In practice, this is unlikely to be a major problem as the variation along the correction vectors should be small anyway.
+Nonetheless, we make sure to remove variation along the correction vector at each step for _all_ batches, i.e., "reorthogonalization".
+This has the advantage of being able to diagnose large losses of variances due to non-orthogonality, 
+which would otherwise been ignored if the correction vector at each step happened to be orthogonal to the batches being merged at that step.
+
+A simple 2D example of the above effect would be a situation where cell populations are arranged as corners of a square.
+Two adjacent corners form one batch while the other two corners form their own separate batches.
+Depending on the merge order, one could merge the two separate corners first, and then merge that onto the largest batch.
+This is a clear case of non-orthogonality because the first correction vector is parallel to the biological variation in the largest batch.
+If we did not reorthogonalize, this non-orthogonality would not be diagnosed and we would be misled in the resulting analysis.
+
+The same argument applies for hierarchical applications of `fastMNN()`.
+Say we have a current call of `fastMNN()` containing multiple inputs, where each input contains the output of a previous `fastMNN()` call.
+The function will collect the correction vectors used for each merge step in the previous calls,
+and then reapply them to all inputs in the current call.
+This ensures that the (removal of) variation is consistent across inputs prior to further correction.
+
+**Comments:**
+
+- Note that the orthogonalization is only guaranteed to remove variation along the correction vector during the current merge step.
+It is unnecessarily aggressive to ensure that variation is permanently lost along this vector across all merge steps.
+Consider the simple case of different two correction vectors that are collected across two merge steps.
+Any slight difference between the two vectors requires the removal of variation along the vector difference,
+which would be small and likely random - a similar problem to the case without a batch effect.
+Currently, the function only ensures orthogonalization with respect to the current merge step, 
+which is sufficient to solve the kissing problem.
+
 # Performing the batch correction
 
 For each cell $i$ in the target batch, we identify the `k` nearest neighbouring paired cells, i.e., cells in the same batch that are involved in a MNN pair.
