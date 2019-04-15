@@ -90,14 +90,21 @@ This suppresses batch-to-batch differences in the technical noise at low counts 
 Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
 
 Obviously, biological variation will also experience greater shrinkage towards zero. 
-However, this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
+This is not a major problem as long as this shrinkage is consistent across batches.
 In fact, the loss of biological variation from increased shrinkage of high-coverage batches is correct if that variation could not have manifested in the low-coverage batches anyway.
 Low-abundance genes with no expression in low-coverage batches are not informative and should not be used to direct the correction,
 even if they are expressed and useful in high-coverage batches.
 (Of course, once the correction is performed based on informative genes, it is entirely possible to obtain corrected values for them.)
 
-In addition, technical noise at large counts is less pronounced, so reduced shrinkage is not a problem.
-We note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
+These concerns mostly apply to low counts where the variance is highly dependent on the mean.
+At high counts, the effects of technical noise are less pronounced, mitigating any differences between batches due to coverage.
+Shrinkage also has less effect, allowing the biological variation to be preserved,
+e.g., for large counts in upregulated genes.
+
+Rather than downscaling, we could achieve the same effect by downsampling, e.g., with `downsampleCounts()`.
+This would provie a more accurate match of the mean-variance relationship,
+but introduces an element of stochasticity (especially at low counts) that may not be desirable.
+Note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
 
 # Reducing dimensionality
 
