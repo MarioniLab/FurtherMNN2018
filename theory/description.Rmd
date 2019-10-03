@@ -295,6 +295,24 @@ Note that the PCA step is only done once at the start, though.
 
 # Further comments
 
+## Feature selection
+
+We average the biological components across all batches for each gene and select genes with high average biological components.
+This statistic is responsive to batch-specific HVGs while still preserving some information about the within-batch ranking of genes.
+In particular, for genes with consistent biological components across batches, taking the average will just converge to the true value, which is appealing.
+
+The rationale for this approach is even stronger if we were to take all genes with positive biological components.
+Consider a gene for which the null hypothesis is true, i.e., there is no biological variability such that the total variance is equal to the technical component determined by the mean-variance trend. 
+The estimate of the variance will fluctuate around the true value, meaning that this gene will have a positive biological component ~50% of the time for a single batch - this errs on the side of retaining more genes to capture more signal.
+Notably, this remains true even after taking the average (provided that the null hypothesis is true for all batches), such that we can generally expect the number of retained genes and the signal-noise trade-off to be constant regardless of the number of batches.
+
+For comparison, let us consider another approach where we take the union of the features selected from each batch without computing the average.
+This leads to increasing number of genes being retained with an increasing number of batches, which defeats the purpose of feature selection.
+We could mitigate this effect by adjusting the number of genes retained per batch, but this is relatively unintuitive and unpredictable as the final number of genes depend on how many genes in the per-batch HVG sets are shared.
+Performing an intersection has the opposite effect and is obviously detrimental if the batches have different factors of variation.
+
+## Computational considerations
+
 Using a single core, the `fastMNN()` function completes in several minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
 Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized.
 Memory usage is minimal through the use of the `r Biocpkg("DelayedArray")` framework, which avoids creating the merged matrix explicitly for PCA.
