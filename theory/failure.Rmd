@@ -1,0 +1,69 @@
+---
+title: A discussion of the known failure points of the `fastMNN` algorithm
+author: Aaron Lun
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document
+---
+
+# Variable batch effects
+
+It is possible for the batch effect to be variable in direction across different subpopulations without violating the assumption of orthogonality to the biological subspace.
+In such cases, the orthogonalization step performed by `fastMNN()` is not effective at resolving the kissing problem for subpopulations with batch vectors that that differ from the average batch vector.
+This results in incomplete mixing of batches within each cluster, which is usually harmless but not aesthetically pleasing.
+The solution is to increase `k`, ideally to the anticipated average size of each cluster.
+
+# Scatter in shared space
+
+Consider the following scenario involving two batches A and B:
+
+```
+<-----> Biology
+                        BBBBBBBB
+^              b b b b  BBBBBBBB  b b b b
+|                       BBBBBBBB
+| Batch
+|              AAAAAAA
+v     a a a a  AAAAAAA  a a a a a
+               AAAAAAA
+```
+
+With each batch, the population can be considered to be distributed with most cells in the center and some cells in the tails.
+The question is whether `B` should be merged with `A` or with `a` (and conversely, whether `A` should be merged with `B` or `b`).
+This leads directly to a difference in interpretation:
+
+- `A` matches up to `B`, the two batches refer to exactly the same populations,
+   and the batch effect was not orthogonal to the biological subspace (in this case, the horizontal variation).
+- `A` matches up to `b`, the shift in location in batches represents some genuine biology,
+  and the batch effect is orthogonal to the biological subspace.
+
+This is problematic as there is no clearly correct way to execute the merge.
+`fastMNN()` favors the second interpretation as the first choice would requiring merging along the biological subspace,
+which is unpalatable as it permits unintended removal of biological heterogeneity in other contexts.
+Nonetheless, the solution is to again increase `k` if deeper mixing is required.
+
+# Behaviour in the absence of a batch effect
+
+An interesting consequence of the orthogonalization step is that `fastMNN()` may not work correctly in the _absence_ of a batch effect.
+In such cases, the batch vector will be of near-zero length in some random direction.
+If this is parallel to the biological subspace, orthogonalization may subsequently end up removing geniune biology.
+This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place.
+In practice, this is unlikely to be a major problem as a random vector is still likely to be orthogonal to any one biological dimension.
+If this is not the case, we should be able to observe a large loss of variance that indicates that `fastMNN()` should not be run.
+
+`fastMNN()` can also be instructed to skip the correction if the relative batch effect size is below some threshold.
+The relative size is defined as the ratio of the L2 norm of the average correction vector to the expected L2 norm of the per-pair vectors.
+This is small if there is no batch effect as the per-pair vectors will point in different directions. 
+If large losses of variance at particular merge steps are suspected to be caused by the lack of a batch effect,
+we recommend examining the relative effect sizes and picking a threshold that allows one to skip those steps.
+
+**Comments:**
+
+- Another strategy would be to ask whether or not the average batch effect size is significantly greater than zero.
+However, this requires explicit distributional assumptions (e.g., i.i.d. normal) that are unlikely to be reasonable.
+We are also more likely to reject the null with more cells, eventually favouring correction even in the presence of tiny batch effects.
+In contrast, our definition of the relative effect size will simply give a more precise estimate as the number of cells increases.
+- `fastMNN()` will not skip correction by default, even though the relative effect sizes are available.
+This is because the relative effect size can be small in situations where there is a genuine batch effect
+(e.g., due to a small proportion of per-pair vectors that are very large).
+More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.
