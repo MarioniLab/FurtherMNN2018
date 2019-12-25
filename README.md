@@ -5,6 +5,9 @@
 This repository contains code for further development of the mutual nearest neighbours (MNN) batch correction method, as implemented in the `mnnCorrect` and `fastMNN` functions in the [_batchelor_](https://github.com/LTLA/batchelor) package.
 It is based on the code at https://github.com/MarioniLab/MNN2017, which accompanies the paper **Batch effects in single-cell RNA-sequencing data are corrected by matching mutual nearest neighbors** by [Haghverdi _et al. (2018)_](https://doi.org/10.1038/nbt.4091).
 
+- [Description of the theory behind `fastMNN()`](https://marionilab.github.io/FurtherMNN2018/theory/description.html)
+- [Discussion of different normalization strategies](https://marionilab.github.io/FurtherMNN2018/theory/normalization.html)
+
 ## Simulations
 
 To run the simulations, enter the `simulations/` directory and run:
