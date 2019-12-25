@@ -3,8 +3,7 @@ title: A description of the theory behind the `fastMNN` algorithm
 author: Aaron Lun
 date: "`r Sys.Date()`"
 output:
-  BiocStyle::html_document:
-    toc_float: yes
+  BiocStyle::html_document
 ---
 
 # Overview
@@ -16,88 +15,6 @@ The `fastMNN()` approach is much simpler than the original `mnnCorrect()` algori
 3. Remove variation along the average batch vector in both reference and target batches.
 4. Correct the cells in the target batch towards the reference, using locally weighted correction vectors.
 5. Merge the corrected target batch with the reference, and repeat with the next target batch.
-
-# Cosine normalization
-
-## Rationale
-
-If scaling normalization is only performed _within_ each batch, there may be a systematic scaling difference in the normalized expression values between batches.
-This unnecessarily adds an extra dimension to the differences between batches, which complicates later correction steps.
-Ideally, one would address this problem during normalization (see `multiBatchNorm()` below) but this is not possible for arbitrary log-expression values.
-Correctly reversing the log-transformation requires knowledge of the base of the log function and the added pseudo-count, 
-which complicates the interface at best and may not be available at worst.
-
-Cosine normalization of the log-expression values represents the next-best solution for removing these differences between batches.
-Real single-cell data contains many small counts (where the log function is near-linear) or many zeroes (which remain zero when the pseudo-count is 1).
-In these applications, scaling differences due to separate normalization will not manifest as the expected shift in the log-transformed expression.
-Rather, they are better represented as scaling differences in the log-expression vectors, which cosine normalization aims to remove.
-
-## Preserving orthogonality
-
-If the batch effect was orthogonal to the biological subspace in the un-normalized space, is this still the case after cosine normalization?
-Not in general - one can imagine a simple 2D scenario where the biological subspace is a horizontal line and the batch effect is a vertial shift.
-Cosine normalization will map the manifolds onto the unit circle around the origin and break orthogonality.
-
-We can consider the cases where this discrepancy is minimized. 
-If we have the biological subspace $B$ and a batch vector $W$, the cosine-normalized expression without the batch vector is
-
-$$
-\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \;,
-$$
-
-for a cell corresponding to $x$.
-The cosine-normalized expression after adding the batch vector is
-
-$$
-\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} \;.
-$$
-
-The difference between the two represents the batch vector in cosine-normalized space. 
-Biological differences in cosine-normalized space can be represented by differences between the cell corresponding to $x$ and another cell corresponding to $y$, i.e.,
-
-$$
-\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} 
-$$
-
-for any $y\ne x$.
-We ask whether the batch vector is orthogonal to an arbitrary biological difference vector, i.e., we look at
-
-$$
-\begin{align*}
-& \left(\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)^T
-\left(\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} - \frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right) \\
-& = \left(\frac{x^T\mathbf{B}^T\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{y^T\mathbf{B}^T\mathbf{B}x}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)
-\left[ \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x + W^TW}} - \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right] \;,
-\end{align*}
-$$
-
-which is only close to zero for arbitrary $y$ when $W^TW$ is small relative to $x^T\mathbf{B}^T\mathbf{B}x$.
-In other words, the batch effect remains approximately orthogonal if the batches are not too far apart relative to the L2 norm of the expression vector.
-This is probably reasonable if the batch effect is not as large as the magnitude of expression for each gene.
-
-Of course, this is all rather academic, as one can simply change the orthogonality assumption to refer to the cosine-normalized space in the first place.
-The cosine-normalized space loses one dimension of variation relative to the un-normalized space, but both are still high-dimensional,
-so the assumption of orthogonality is still reasonable in the former.
-
-## `multiBatchNorm()` as an alternative
-
-The `multiBatchNorm()` function accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
-Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
-
-We deliberately chose to downscale all batches rather than scale all batches to the mean or median coverage.
-By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
-This suppresses batch-to-batch differences in the technical noise at low counts and improves the quality of the MNN correction.
-Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
-
-Obviously, biological variation will also experience greater shrinkage towards zero. 
-However, this seems to be less of an issue as large counts in upregulated genes are less affected by shrinkage.
-In fact, the loss of biological variation from increased shrinkage of high-coverage batches is correct if that variation could not have manifested in the low-coverage batches anyway.
-Low-abundance genes with no expression in low-coverage batches are not informative and should not be used to direct the correction,
-even if they are expressed and useful in high-coverage batches.
-(Of course, once the correction is performed based on informative genes, it is entirely possible to obtain corrected values for them.)
-
-In addition, technical noise at large counts is less pronounced, so reduced shrinkage is not a problem.
-We note that standardization of the expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
 
 # Reducing dimensionality
 
@@ -241,6 +158,40 @@ This is because the relative effect size can be small in situations where there 
 (e.g., due to a small proportion of per-pair vectors that are very large).
 More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.
 
+## Reorthogonalization of remaining batches
+
+Orthogonalization only applies to the batches currently being merged, e.g., $A$ and $B$.
+If another batch $C$ is to be merged later, there will still be non-zero variation within $C$ along the $A\toB$ correction vector.
+This will not be removed if the correction vector for $C\to \{A, B\}$ is in a different direction.
+Thus, we would introduce an artificial difference in the variance structure among the different batches.
+
+In practice, this is unlikely to be a major problem as the variation along the correction vectors should be small anyway.
+Nonetheless, we make sure to remove variation along the correction vector at each step for _all_ batches, i.e., "reorthogonalization".
+This has the advantage of being able to diagnose large losses of variances due to non-orthogonality, 
+which would otherwise been ignored if the correction vector at each step happened to be orthogonal to the batches being merged at that step.
+
+A simple 2D example of the above effect would be a situation where cell populations are arranged as corners of a square.
+Two adjacent corners form one batch while the other two corners form their own separate batches.
+Depending on the merge order, one could merge the two separate corners first, and then merge that onto the largest batch.
+This is a clear case of non-orthogonality because the first correction vector is parallel to the biological variation in the largest batch.
+If we did not reorthogonalize, this non-orthogonality would not be diagnosed and we would be misled in the resulting analysis.
+
+The same argument applies for hierarchical applications of `fastMNN()`.
+Say we have a current call of `fastMNN()` containing multiple inputs, where each input contains the output of a previous `fastMNN()` call.
+The function will collect the correction vectors used for each merge step in the previous calls,
+and then reapply them to all inputs in the current call.
+This ensures that the (removal of) variation is consistent across inputs prior to further correction.
+
+**Comments:**
+
+- Note that the orthogonalization is only guaranteed to remove variation along the correction vector during the current merge step.
+It is unnecessarily aggressive to ensure that variation is permanently lost along this vector across all merge steps.
+Consider the simple case of different two correction vectors that are collected across two merge steps.
+Any slight difference between the two vectors requires the removal of variation along the vector difference,
+which would be small and likely random - a similar problem to the case without a batch effect.
+Currently, the function only ensures orthogonalization with respect to the current merge step, 
+which is sufficient to solve the kissing problem.
+
 # Performing the batch correction
 
 For each cell $i$ in the target batch, we identify the `k` nearest neighbouring paired cells, i.e., cells in the same batch that are involved in a MNN pair.
@@ -253,6 +204,24 @@ The newly corrected cells are merged with the reference batch, and the entire pr
 Note that the PCA step is only done once at the start, though.
 
 # Further comments
+
+## Feature selection
+
+We average the biological components across all batches for each gene and select genes with high average biological components.
+This statistic is responsive to batch-specific HVGs while still preserving some information about the within-batch ranking of genes.
+In particular, for genes with consistent biological components across batches, taking the average will just converge to the true value, which is appealing.
+
+The rationale for this approach is even stronger if we were to take all genes with positive biological components.
+Consider a gene for which the null hypothesis is true, i.e., there is no biological variability such that the total variance is equal to the technical component determined by the mean-variance trend. 
+The estimate of the variance will fluctuate around the true value, meaning that this gene will have a positive biological component ~50% of the time for a single batch - this errs on the side of retaining more genes to capture more signal.
+Notably, this remains true even after taking the average (provided that the null hypothesis is true for all batches), such that we can generally expect the number of retained genes and the signal-noise trade-off to be constant regardless of the number of batches.
+
+For comparison, let us consider another approach where we take the union of the features selected from each batch without computing the average.
+This leads to increasing number of genes being retained with an increasing number of batches, which defeats the purpose of feature selection.
+We could mitigate this effect by adjusting the number of genes retained per batch, but this is relatively unintuitive and unpredictable as the final number of genes depend on how many genes in the per-batch HVG sets are shared.
+Performing an intersection has the opposite effect and is obviously detrimental if the batches have different factors of variation.
+
+## Computational considerations
 
 Using a single core, the `fastMNN()` function completes in several minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset.
 Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized.

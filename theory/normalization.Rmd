@@ -1,0 +1,198 @@
+---
+title: Commentary on the different normalization modes
+author: Aaron Lun
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(error=FALSE, warning=FALSE, message=FALSE)
+```
+
+# Cosine normalization
+
+## Rationale
+
+If scaling normalization is only performed _within_ each batch, there may be a systematic scaling difference in the normalized expression values between batches.
+This unnecessarily adds an extra dimension to the differences between batches, which complicates later correction steps.
+Ideally, one would address this problem during normalization (see `multiBatchNorm()` below) but this is not possible for arbitrary log-expression values.
+Correctly reversing the log-transformation requires knowledge of the base of the log function and the added pseudo-count, 
+which complicates the interface at best and may not be available at worst.
+
+Cosine normalization of the log-expression values represents the next-best solution for removing these differences between batches.
+Real single-cell data contains many small counts (where the log function is near-linear) or many zeroes (which remain zero when the pseudo-count is 1).
+In these applications, scaling differences due to separate normalization will not manifest as the expected shift in the log-transformed expression.
+Rather, they are better represented as scaling differences in the log-expression vectors, which cosine normalization aims to remove.
+
+## Preserving orthogonality
+
+If the batch effect was orthogonal to the biological subspace in the un-normalized space, is this still the case after cosine normalization?
+Not in general - one can imagine a simple 2D scenario where the biological subspace is a horizontal line and the batch effect is a vertial shift.
+Cosine normalization will map the manifolds onto the unit circle around the origin and break orthogonality.
+
+We can consider the cases where this discrepancy is minimized. 
+If we have the biological subspace $B$ and a batch vector $W$, the cosine-normalized expression without the batch vector is
+
+$$
+\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \;,
+$$
+
+for a cell corresponding to $x$.
+The cosine-normalized expression after adding the batch vector is
+
+$$
+\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} \;.
+$$
+
+The difference between the two represents the batch vector in cosine-normalized space. 
+Biological differences in cosine-normalized space can be represented by differences between the cell corresponding to $x$ and another cell corresponding to $y$, i.e.,
+
+$$
+\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} 
+$$
+
+for any $y\ne x$.
+We ask whether the batch vector is orthogonal to an arbitrary biological difference vector, i.e., we look at
+
+$$
+\begin{align*}
+& \left(\frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{\mathbf{B}y}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)^T
+\left(\frac{\mathbf{B}x + W}{\sqrt{(\mathbf{B}x + W)^T(\mathbf{B}x + W)}} - \frac{\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right) \\
+& = \left(\frac{x^T\mathbf{B}^T\mathbf{B}x}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} - \frac{y^T\mathbf{B}^T\mathbf{B}x}{\sqrt{y^T\mathbf{B}^T\mathbf{B}y}} \right)
+\left[ \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x + W^TW}} - \frac{1}{\sqrt{x^T\mathbf{B}^T\mathbf{B}x}} \right] \;,
+\end{align*}
+$$
+
+which is only close to zero for arbitrary $y$ when $W^TW$ is small relative to $x^T\mathbf{B}^T\mathbf{B}x$.
+In other words, the batch effect remains approximately orthogonal if the batches are not too far apart relative to the L2 norm of the expression vector.
+This is probably reasonable if the batch effect is not as large as the magnitude of expression for each gene.
+
+Of course, this is all rather academic, as one can simply change the orthogonality assumption to refer to the cosine-normalized space in the first place.
+The cosine-normalized space loses one dimension of variation relative to the un-normalized space, but both are still high-dimensional,
+so the assumption of orthogonality is still reasonable in the former.
+
+# `multiBatchNorm()` as an alternative
+
+The `multiBatchNorm()` function accepts a number of batches and will downscale the counts in each batch (indirectly via adjustment of size factors) to match the coverage of the lowest-coverage batch.
+Subsequent normalization and log-transformation will then yield expression values that are more directly comparable between batches.
+
+We deliberately chose to downscale all batches rather than scale all batches to the mean or median coverage.
+By downscaling, we increase the shrinkage of log-expression values towards zero upon addition of the pseudo-count of 1 in `normalize()`.
+This suppresses batch-to-batch differences in the technical noise at low counts and improves the quality of the MNN correction.
+Otherwise, cells in low-coverage batches would be more spread out, making it difficult to identify the correct MNN pairs.
+
+Obviously, biological variation will also experience greater shrinkage towards zero. 
+This is not a major problem as long as this shrinkage is consistent across batches.
+In fact, the loss of biological variation from increased shrinkage of high-coverage batches is correct if that variation could not have manifested in the low-coverage batches anyway.
+Low-abundance genes with no expression in low-coverage batches are not informative and should not be used to direct the correction,
+even if they are expressed and useful in high-coverage batches.
+(Of course, once the correction is performed based on informative genes, it is entirely possible to obtain corrected values for them.)
+
+These concerns mostly apply to low counts where the variance is highly dependent on the mean.
+At high counts, the effects of technical noise are less pronounced, mitigating any differences between batches due to coverage.
+Shrinkage also has less effect, allowing the biological variation to be preserved,
+e.g., for large counts in upregulated genes.
+
+Rather than downscaling, we could achieve the same effect by downsampling, e.g., with `downsampleCounts()`.
+This would provide a more accurate match of the mean-variance relationship,
+but introduces an element of stochasticity (especially at low counts) that may not be desirable.
+Note that standardization of the per-batch expression matrix is not advisable here as batches with different cell type composition will geniunely exhibit different per-gene variances.
+
+# Practical notes
+
+## Setting up the data
+
+To explore the effects of these different modes of normalization, we will use some example datasets.
+One of these is the classic Zeisel brain dataset:
+
+```{r}
+library(scRNAseq)
+library(scater)
+library(scran)
+
+X <- ZeiselBrainData()
+X <- addPerCellQC(X, subsets=list(Mito=grep("mt-", rownames(X))))
+qcX <- quickPerCellQC(colData(X), percent_subsets="subsets_Mito_percent")
+X <- X[,!qcX$discard]
+
+X <- logNormCounts(X)
+decX <- modelGeneVar(X)
+```
+
+The other is the Tasic brain dataset:
+
+```{r}
+Y <- TasicBrainData()
+Y <- addPerCellQC(Y, subsets=list(Mito=grep("mt_", rownames(Y))))
+qcY <- quickPerCellQC(colData(Y), percent_subsets="subsets_Mito_percent")
+Y <- Y[,!qcY$discard]
+
+Y <- logNormCounts(Y)
+decY <- modelGeneVar(Y)
+```
+
+We combine their variance modelling results in preparation for a combined analysis:
+
+```{r}
+universe <- intersect(rownames(X), rownames(Y))
+combined <- combineVar(decX[universe,], decY[universe,])
+chosen <- getTopHVGs(combined, n=5000)
+
+X2 <- X[universe,]
+Y2 <- Y[universe,]
+```
+
+## Testing the different normalization strategies
+
+First, we try with both `multiBatchNorm()` and cosine normalization:
+
+```{r}
+library(batchelor)
+stuff <- multiBatchNorm(X2, Y2)
+
+set.seed(10000)
+ref1 <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen)
+ref1 <- runTSNE(ref1, dimred="corrected")
+plotTSNE(ref1, colour_by="batch")
+```
+
+We repeat with just cosine normalization.
+
+```{r}
+ref2 <- fastMNN(X2, Y2, subset.row=chosen)
+ref2 <- runTSNE(ref2, dimred="corrected")
+plotTSNE(ref2, colour_by="batch")
+```
+
+And finally, without cosine normalization.
+
+```{r}
+ref3 <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen, cos.norm=FALSE)
+ref3 <- runTSNE(ref3, dimred="corrected")
+plotTSNE(ref3, colour_by="batch")
+```
+
+Cosine normalization provides the most benefit in the case study above, probably because it is applied after subsetting to HVGs.
+Tis removes variation due to systematic differences in HVG expression within each batch, reducing the risk of incomplete mixing - 
+indeed, we see from below that the high-L2 cells form their own cluster if cosine normalization is not performed.
+`multiBatchNorm()` also improves mixing to limited extent, most likely due to a similar effect of removing variation in the higher-coverage batch by squeezing all expression values towards zero.
+
+```{r, fig.asp=1, fig.wide=TRUE}
+l2 <- c(cosineNorm(logcounts(stuff[[1]])[chosen,], mode="l2"), 
+    cosineNorm(logcounts(stuff[[2]])[chosen,], mode="l2"))
+
+batch.l2 <- paste(ifelse(l2 < 100, "Low L2", "High L2"), 
+    "in batch", ref3$batch)
+
+gridExtra::grid.arrange(
+    plotTSNE(ref1, colour_by=I(batch.l2)) + ggtitle("With cosine"),
+    plotTSNE(ref3, colour_by=I(batch.l2)) + ggtitle("Without cosine")
+)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

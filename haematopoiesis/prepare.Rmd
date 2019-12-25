@@ -129,7 +129,7 @@ We subset to those cells that are in the metadata:
 ```{r}
 map.fname <- bfcrpath(bfc, 
     "https://raw.githubusercontent.com/MarioniLab/MNN2017/master/Haematopoiesis/MAP.csv")
-metaA <- read.csv2(map.fname, sep=",", stringsAsFactors = FALSE, head=TRUE, row.names=1)
+metaA <- read.csv2(map.fname, sep=",", header=FALSE, row.names=1)
 metainds <- match(rownames(metaA), colnames(sceA))
 sceA <- sceA[,metainds]
 ncol(sceA)
