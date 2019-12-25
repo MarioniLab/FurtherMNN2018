@@ -192,13 +192,17 @@ summary {
 <li><a href="#removing-intra-batch-variation"><span class="toc-section-number">4</span> Removing intra-batch variation</a><ul>
 <li><a href="#orthogonalization-to-the-batch-vector"><span class="toc-section-number">4.1</span> Orthogonalization to the batch vector</a></li>
 <li><a href="#estimating-the-variance-removed"><span class="toc-section-number">4.2</span> Estimating the variance removed</a></li>
-<li><a href="#behaviour-in-the-absence-of-a-batch-effect"><span class="toc-section-number">4.3</span> Behaviour in the absence of a batch effect</a></li>
-<li><a href="#reorthogonalization-of-remaining-batches"><span class="toc-section-number">4.4</span> Reorthogonalization of remaining batches</a></li>
+<li><a href="#reorthogonalization-of-remaining-batches"><span class="toc-section-number">4.3</span> Reorthogonalization of remaining batches</a></li>
 </ul></li>
 <li><a href="#performing-the-batch-correction"><span class="toc-section-number">5</span> Performing the batch correction</a></li>
 <li><a href="#further-comments"><span class="toc-section-number">6</span> Further comments</a><ul>
 <li><a href="#feature-selection"><span class="toc-section-number">6.1</span> Feature selection</a></li>
 <li><a href="#computational-considerations"><span class="toc-section-number">6.2</span> Computational considerations</a></li>
+<li><a href="#known-failure-points"><span class="toc-section-number">6.3</span> Known failure points</a><ul>
+<li><a href="#variable-batch-effects"><span class="toc-section-number">6.3.1</span> Variable batch effects</a></li>
+<li><a href="#scatter-in-shared-space"><span class="toc-section-number">6.3.2</span> Scatter in shared space</a></li>
+<li><a href="#behaviour-in-the-absence-of-a-batch-effect"><span class="toc-section-number">6.3.3</span> Behaviour in the absence of a batch effect</a></li>
+</ul></li>
 </ul></li>
 </ul>
 </div>
@@ -259,18 +263,8 @@ W_k^T \mathbf{B}_k = A^T \mathbf{V}_k^T \mathbf{B} = (\mathbf{V}_k A)^T \mathbf{
 <p>Of course, what constitutes a “large” loss of variance is debatable. A large percentage of lost variance may be harmless (and even beneficial) if it removes uninteresting noise. A small percentage may be damaging if it removes a rare population. Nonetheless, this diagnostic provides a quick method for flagging problematic batches.</p>
 <p>If one is concerned about any loss of variation due to orthogonalization, we suggest comparing the merged analysis to separate analyses with individual batches. Loss of important variation should manifest as, e.g., co-clustering in the merged analysis of very different cells.</p>
 </div>
-<div id="behaviour-in-the-absence-of-a-batch-effect" class="section level2">
-<h2><span class="header-section-number">4.3</span> Behaviour in the absence of a batch effect</h2>
-<p>An interesting consequence of the orthogonalization step is that <code>fastMNN()</code> may not work correctly in the <em>absence</em> of a batch effect. In such cases, the batch vector will be of near-zero length in some random direction. If this is parallel to the biological subspace, orthogonalization may subsequently end up removing geniune biology. This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place. In practice, this is unlikely to be a major problem as a random vector is still likely to be orthogonal to any one biological dimension. If this is not the case, we should be able to observe a large loss of variance that indicates that <code>fastMNN()</code> should not be run.</p>
-<p><code>fastMNN()</code> can also be instructed to skip the correction if the relative batch effect size is below some threshold. The relative size is defined as the ratio of the L2 norm of the average correction vector to the expected L2 norm of the per-pair vectors. This is small if there is no batch effect as the per-pair vectors will point in different directions. If large losses of variance at particular merge steps are suspected to be caused by the lack of a batch effect, we recommend examining the relative effect sizes and picking a threshold that allows one to skip those steps.</p>
-<p><strong>Comments:</strong></p>
-<ul>
-<li>Another strategy would be to ask whether or not the average batch effect size is significantly greater than zero. However, this requires explicit distributional assumptions (e.g., i.i.d. normal) that are unlikely to be reasonable. We are also more likely to reject the null with more cells, eventually favouring correction even in the presence of tiny batch effects. In contrast, our definition of the relative effect size will simply give a more precise estimate as the number of cells increases.</li>
-<li><code>fastMNN()</code> will not skip correction by default, even though the relative effect sizes are available. This is because the relative effect size can be small in situations where there is a genuine batch effect (e.g., due to a small proportion of per-pair vectors that are very large). More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.</li>
-</ul>
-</div>
 <div id="reorthogonalization-of-remaining-batches" class="section level2">
-<h2><span class="header-section-number">4.4</span> Reorthogonalization of remaining batches</h2>
+<h2><span class="header-section-number">4.3</span> Reorthogonalization of remaining batches</h2>
 <p>Orthogonalization only applies to the batches currently being merged, e.g., <span class="math inline">\(A\)</span> and <span class="math inline">\(B\)</span>. If another batch <span class="math inline">\(C\)</span> is to be merged later, there will still be non-zero variation within <span class="math inline">\(C\)</span> along the <span class="math inline">\(A\toB\)</span> correction vector. This will not be removed if the correction vector for <span class="math inline">\(C\to \{A, B\}\)</span> is in a different direction. Thus, we would introduce an artificial difference in the variance structure among the different batches.</p>
 <p>In practice, this is unlikely to be a major problem as the variation along the correction vectors should be small anyway. Nonetheless, we make sure to remove variation along the correction vector at each step for <em>all</em> batches, i.e., “reorthogonalization”. This has the advantage of being able to diagnose large losses of variances due to non-orthogonality, which would otherwise been ignored if the correction vector at each step happened to be orthogonal to the batches being merged at that step.</p>
 <p>A simple 2D example of the above effect would be a situation where cell populations are arranged as corners of a square. Two adjacent corners form one batch while the other two corners form their own separate batches. Depending on the merge order, one could merge the two separate corners first, and then merge that onto the largest batch. This is a clear case of non-orthogonality because the first correction vector is parallel to the biological variation in the largest batch. If we did not reorthogonalize, this non-orthogonality would not be diagnosed and we would be misled in the resulting analysis.</p>
@@ -297,6 +291,41 @@ W_k^T \mathbf{B}_k = A^T \mathbf{V}_k^T \mathbf{B} = (\mathbf{V}_k A)^T \mathbf{
 <div id="computational-considerations" class="section level2">
 <h2><span class="header-section-number">6.2</span> Computational considerations</h2>
 <p>Using a single core, the <code>fastMNN()</code> function completes in several minutes on merging the 68K PBMC droplet dataset with the 4K T cell dataset. Most of the time is taken up by computing the cross-product for the initial PCA, which can be (but is not yet) easily parallelized. Memory usage is minimal through the use of the <em><a href="https://bioconductor.org/packages/3.11/DelayedArray">DelayedArray</a></em> framework, which avoids creating the merged matrix explicitly for PCA. The nearest neighbour search is performed using the <em><a href="https://bioconductor.org/packages/3.11/BiocNeighbors">BiocNeighbors</a></em> package, which provides a speed boost over conventional KD-trees for high-dimensional data (see <a href="https://github.com/LTLA/OkNN2018" class="uri">https://github.com/LTLA/OkNN2018</a>) and also supports parallelization.</p>
+</div>
+<div id="known-failure-points" class="section level2">
+<h2><span class="header-section-number">6.3</span> Known failure points</h2>
+<div id="variable-batch-effects" class="section level3">
+<h3><span class="header-section-number">6.3.1</span> Variable batch effects</h3>
+<p>It is possible for the batch effect to be variable in direction across different subpopulations without violating the assumption of orthogonality to the biological subspace. In such cases, the orthogonalization step performed by <code>fastMNN()</code> is not effective at resolving the kissing problem for subpopulations with batch vectors that that differ from the average batch vector. This results in incomplete mixing of batches within each cluster, which is usually harmless but not aesthetically pleasing. The solution is to increase <code>k</code>, ideally to the anticipated average size of each cluster.</p>
+</div>
+<div id="scatter-in-shared-space" class="section level3">
+<h3><span class="header-section-number">6.3.2</span> Scatter in shared space</h3>
+<p>Consider the following scenario involving two batches A and B:</p>
+<pre><code>&lt;-----&gt; Biology
+                        BBBBBBBB
+^              b b b b  BBBBBBBB  b b b b
+|                       BBBBBBBB
+| Batch
+|              AAAAAAA
+v     a a a a  AAAAAAA  a a a a a
+               AAAAAAA</code></pre>
+<p>With each batch, the population can be considered to be distributed with most cells in the center and some cells in the tails. The question is whether <code>B</code> should be merged with <code>A</code> or with <code>a</code> (and conversely, whether <code>A</code> should be merged with <code>B</code> or <code>b</code>). This leads directly to a difference in interpretation:</p>
+<ul>
+<li><code>A</code> matches up to <code>B</code>, the two batches refer to exactly the same populations, and the batch effect was not orthogonal to the biological subspace (in this case, the horizontal variation).</li>
+<li><code>A</code> matches up to <code>b</code>, the shift in location in batches represents some genuine biology, and the batch effect is orthogonal to the biological subspace.</li>
+</ul>
+<p>This is problematic as there is no clearly correct way to execute the merge. <code>fastMNN()</code> favors the second interpretation as the first choice would requiring merging along the biological subspace, which is unpalatable as it permits unintended removal of biological heterogeneity in other contexts. Nonetheless, the solution is to again increase <code>k</code> if deeper mixing is required.</p>
+</div>
+<div id="behaviour-in-the-absence-of-a-batch-effect" class="section level3">
+<h3><span class="header-section-number">6.3.3</span> Behaviour in the absence of a batch effect</h3>
+<p>An interesting consequence of the orthogonalization step is that <code>fastMNN()</code> may not work correctly in the <em>absence</em> of a batch effect. In such cases, the batch vector will be of near-zero length in some random direction. If this is parallel to the biological subspace, orthogonalization may subsequently end up removing geniune biology. This is a natural side-effect of the orthogonality assumption, which obviously fails if there is no batch vector in the first place. In practice, this is unlikely to be a major problem as a random vector is still likely to be orthogonal to any one biological dimension. If this is not the case, we should be able to observe a large loss of variance that indicates that <code>fastMNN()</code> should not be run.</p>
+<p><code>fastMNN()</code> can also be instructed to skip the correction if the relative batch effect size is below some threshold. The relative size is defined as the ratio of the L2 norm of the average correction vector to the expected L2 norm of the per-pair vectors. This is small if there is no batch effect as the per-pair vectors will point in different directions. If large losses of variance at particular merge steps are suspected to be caused by the lack of a batch effect, we recommend examining the relative effect sizes and picking a threshold that allows one to skip those steps.</p>
+<p><strong>Comments:</strong></p>
+<ul>
+<li>Another strategy would be to ask whether or not the average batch effect size is significantly greater than zero. However, this requires explicit distributional assumptions (e.g., i.i.d. normal) that are unlikely to be reasonable. We are also more likely to reject the null with more cells, eventually favouring correction even in the presence of tiny batch effects. In contrast, our definition of the relative effect size will simply give a more precise estimate as the number of cells increases.</li>
+<li><code>fastMNN()</code> will not skip correction by default, even though the relative effect sizes are available. This is because the relative effect size can be small in situations where there is a genuine batch effect (e.g., due to a small proportion of per-pair vectors that are very large). More generally, the absence of a batch effect is an uncommon scenario that warrants some further manual investigation.</li>
+</ul>
+</div>
 </div>
 </div>
 
