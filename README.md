@@ -7,6 +7,7 @@ It is based on the code at https://github.com/MarioniLab/MNN2017, which accompan
 
 - [Description of the theory behind `fastMNN()`](https://marionilab.github.io/FurtherMNN2018/theory/description.html)
 - [Discussion of different normalization strategies](https://marionilab.github.io/FurtherMNN2018/theory/normalization.html)
+- [Discussion of known failure points](https://marionilab.github.io/FurtherMNN2018/theory/failure.html)
 
 ## Simulations
 
