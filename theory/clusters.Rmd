@@ -1,0 +1,224 @@
+---
+title: Cluster-based mutual nearest neighbors correction 
+author: Aaron Lun
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document
+---
+
+# Overview
+
+Consider the scenario where each batch has been clustered separately,
+and each cluster has already been annotated with some meaningful biological state.
+We want to perform correction to examine the relationships between clusters across batches,
+but in a manner that is more likely to preserve these meaningful within-batch clusters.
+This is achieved by performing the correction on the cluster centroids and then applying the changes to the per-cell values.
+
+
+# Evaluation
+
+```{r}
+library(BiocNeighbors)
+evaluator <- function(X, clusters) {
+    means <- sds <- list()
+    for (y in unique(clusters)) {
+        current <- X[clusters==y,,drop=FALSE]
+        means[[y]] <- colMeans(current)
+        sds[[y]] <- sqrt(sum(colVars(current)))
+    }
+
+    means <- do.call(rbind, means)
+    closest <- findKNN(means, k=1, get.index=FALSE)$distance
+    data.frame(closest=closest, SD=unlist(sds), row.names=rownames(means))
+}
+```
+
+
+# Demonstration on pancreas data
+
+## Setup
+
+First we set up the Grun dataset.
+We will skip some of the more involved processing for the sake of brevity:
+
+```{r}
+library(scRNAseq)
+X <- GrunPancreasData()
+
+library(scater)
+X <- addPerCellQC(X)
+qcX <- quickPerCellQC(colData(X))
+X <- X[,!qcX$discard]
+
+library(scran)
+X <- logNormCounts(X)
+decX <- modelGeneVar(X)
+
+X <- runPCA(X, ncomponents=20, subset_row=getTopHVGs(decX, n=2000))
+g <- buildSNNGraph(X, use.dimred="PCA")
+X$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We repeat this for the Muraro dataset:
+
+```{r}
+Y <- MuraroPancreasData()
+Y <- addPerCellQC(Y)
+qcY <- quickPerCellQC(colData(Y))
+Y <- Y[,!qcY$discard]
+
+Y <- logNormCounts(Y)
+decY <- modelGeneVar(Y)
+
+Y <- runPCA(Y, ncomponents=20, subset_row=getTopHVGs(decY, n=2000))
+g <- buildSNNGraph(Y, use.dimred="PCA")
+Y$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We compute the HVGs and adjust the scale of coverage.
+
+```{r}
+universe <- intersect(rownames(X), rownames(Y))
+combined <- combineVar(decX[universe,], decY[universe,])
+chosen <- getTopHVGs(combined, n=5000)
+
+library(batchelor)
+stuff <- multiBatchNorm(X[universe,], Y[universe,])
+```
+
+## Reference correction with `fastMNN()`
+
+We run `fastMNN()` to provide a baseline comparison.
+
+```{r}
+ref <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen)
+ref <- runTSNE(ref, dimred="corrected")
+plotTSNE(ref, colour_by="batch")
+```
+
+The most quantitative evaluation is to see whether the correction merges clusters from the same batch together.
+We do this by computing co-assignment probabilities between the old and new clusters.
+
+```{r}
+evaluator(reducedDim(ref)[ref$batch==1,], X$cluster)
+non.na <- !is.na(Y$label)
+evaluator(reducedDim(ref)[ref$batch==2,][non.na,], Y$label[non.na])
+```
+
+It is clear that some clusters are coerced together by `fastMNN()`.
+
+## Semi-supervised correction
+
+Grun doesn't have labels, so we'll just use its clusters in conjunction with Muraro's labels.
+
+```{r}
+stuff2 <- lapply(stuff, logcounts)
+stuff2 <- lapply(stuff2, cosineNorm, subset.row=chosen)
+pca <- multiBatchPCA(stuff2[[1]], stuff2[[2]],
+    BSPARAM=BiocSingular::IrlbaParam(deferred=TRUE))
+
+m.out2 <- reducedClusterMNN(pca[[1]], pca[[2]][non.na,], 
+    clusters=list(X$cluster, Y$label[non.na]))
+t.out2 <- calculateTSNE(m.out2$corrected, pca=FALSE, transposed=TRUE)
+plot(t.out2[,1], t.out2[,2], col=m.out2$batch)
+```
+
+```{r}
+evaluator(m.out2$corrected[m.out2$batch==1,], X$cluster)
+evaluator(m.out2$corrected[m.out2$batch==2,], Y$label[non.na])
+```
+
+The apparent loss of the "unclear" and "epsilon" clusters is more likely a consequence of the lack of granularity in second round of clustering than a deficiency of the correction, given that both of these labels only contain single digit numbers of cells.
+
+# Demonstration on brain data
+
+## Setup
+
+First we set up the Zeisel dataset.
+
+```{r}
+library(scRNAseq)
+Z <- ZeiselBrainData()
+
+library(scater)
+Z <- addPerCellQC(Z, subsets=list(Mito=grep("mt-", rownames(Z))))
+qcZ <- quickPerCellQC(colData(Z), percent_subsets="subsets_Mito_percent")
+Z <- Z[,!qcZ$discard]
+
+library(scran)
+Z <- logNormCounts(Z)
+decZ <- modelGeneVar(Z)
+
+Z <- runPCA(Z, ncomponents=20, subset_row=getTopHVGs(decZ, n=2000))
+g <- buildSNNGraph(Z, use.dimred="PCA")
+Z$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We repeat this for the Tasic dataset:
+
+```{r}
+A <- TasicBrainData()
+A <- addPerCellQC(A, subsets=list(Mito=grep("mt_", rownames(A))))
+qcA <- quickPerCellQC(colData(A))
+A <- A[,!qcA$discard]
+
+A <- logNormCounts(A)
+decA <- modelGeneVar(A)
+
+A <- runPCA(A, ncomponents=20, subset_row=getTopHVGs(decA, n=2000))
+g <- buildSNNGraph(A, use.dimred="PCA")
+A$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We compute the HVGs and adjust the scale of coverage.
+
+```{r}
+universe <- intersect(rownames(Z), rownames(A))
+combined <- combineVar(decZ[universe,], decA[universe,])
+chosen <- getTopHVGs(combined, n=5000)
+
+library(batchelor)
+stuff <- multiBatchNorm(Z[universe,], A[universe,])
+```
+
+## Reference correction with `fastMNN()`
+
+We run `fastMNN()` to provide a baseline comparison.
+
+```{r}
+ref <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen)
+ref <- runTSNE(ref, dimred="corrected")
+plotTSNE(ref, colour_by="batch")
+```
+
+The most quantitative evaluation is to see whether the correction merges clusters from the same batch together.
+We do this by computing co-assignment probabilities between the old and new clusters.
+
+```{r}
+evaluator(reducedDim(ref)[ref$batch==1,], Z$level1class)
+not.unclass <- A$broad_type!="Unclassified"
+evaluator(reducedDim(ref)[ref$batch==2,][not.unclass,], A$broad_type[not.unclass])
+```
+
+## Semi-supervised correction
+
+Grun doesn't have labels, so we'll just use its clusters in conjunction with Muraro's labels.
+
+```{r}
+stuff2 <- lapply(stuff, logcounts)
+stuff2 <- lapply(stuff2, cosineNorm, subset.row=chosen)
+pca <- multiBatchPCA(stuff2[[1]], stuff2[[2]],
+    BSPARAM=BiocSingular::IrlbaParam(deferred=TRUE))
+
+m.out2 <- reducedClusterMNN(pca[[1]], pca[[2]][not.unclass,],
+    clusters=list(Z$level1class, A$broad_type[not.unclass]))
+t.out2 <- calculateTSNE(m.out2$corrected, pca=FALSE, transposed=TRUE)
+plot(t.out2[,1], t.out2[,2], col=m.out2$batch)
+```
+
+
+```{r}
+evaluator(m.out2$corrected[m.out2$batch==1,], Z$level1class)
+evaluator(m.out2$corrected[m.out2$batch==2,], A$broad_type[not.unclass])
+```
+
