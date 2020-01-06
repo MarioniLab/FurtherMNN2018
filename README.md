@@ -8,7 +8,7 @@ It is based on the code at https://github.com/MarioniLab/MNN2017, which accompan
 - [Description of the theory behind `fastMNN()`](https://marionilab.github.io/FurtherMNN2018/theory/description.html)
 - [Discussion of different normalization strategies](https://marionilab.github.io/FurtherMNN2018/theory/normalization.html)
 - [Discussion of known failure points of `fastMNN()`](https://marionilab.github.io/FurtherMNN2018/theory/failure.html)
-- [Description of the `clusterMNN()` method](https://marionilab.github.io/FurtherMNN2018/theory/cluster.html)
+- [Description of the `clusterMNN()` method](https://marionilab.github.io/FurtherMNN2018/theory/clusters.html)
 
 More details on practical usage can be found in the documentation for each function,
 as well as in the [OSCA book](https://osca.bioconductor.org) -
