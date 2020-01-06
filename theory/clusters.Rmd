@@ -1,0 +1,348 @@
+---
+title: Cluster-based mutual nearest neighbors correction 
+author: Aaron Lun
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document
+---
+
+```{r, echo=FALSE}
+library(BiocStyle)
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+# Overview
+
+Consider the scenario where each batch has been clustered separately,
+and each cluster has already been annotated with some meaningful biological state.
+We want to perform correction to examine the relationships between clusters across batches,
+but in a manner that is more likely to preserve these meaningful within-batch clusters.
+This is achieved by performing the correction on the cluster centroids and then applying the changes to the per-cell values,
+which is the basis of the `clusterMNN()` function in `r Biocpkg("batchelor")`.
+
+# Method description
+
+The first step is to compute the centroids for each cluster
+by simply summing the (log-)expression values for all cells in the same cluster.
+Note that this is done after cosine normalization if `cos.norm=TRUE`, see the normalization discussion for more details.
+
+The second step is to perform a PCA on the centroid expression profiles in `multiBatchPCA()`.
+We will use all PCs in the downstream analysis, so the PCA itself has no denoising role;
+rather, we are only using it to allows us to return a `LowRankMatrix` of per-cell corrected values 
+and to impute corrected values for genes that were not used in the PCA.
+We don't need denoising as the cluster centroids should be relatively stable 
+and we don't need compaction as there are not many clusters compared to cells.
+
+The third step is to use the centroid-level PCs in the `reducedMNN()` with `k=1`.
+The choice of `k` is important as it guarantees that each cluster matches no more than one other cluster in another batch.
+We ensure that the correction does not merge together different clusters in the same batch,
+which would otherwise have been a possibility if many-to-one MNN pairs were permitted.
+It also allows us to pull out "metaclusters" of clusters based on following single linkages between batches;
+this would not be reliably done with `k > 1` where the entire set of clusters would become a metacluster.
+
+The final, mostly cosmetic step is to use the corrected per-cluster values to correct the per-cell profiles.
+We compute per-cell correction vectors by averaging across the per-cluster vectors,
+using a smoothing Gaussian kernel with the bandwidth set to the median distance from each cell to its assigned cluster.
+This accounts for local differences in the correction 
+while avoiding discrete edge effects if we had just applied each cluster's correction to its constituent cells.
+
+# Demonstration on pancreas data
+
+## Setup
+
+First, we set up the Grun human pancreas dataset.
+We will skip some of the more involved processing for the sake of brevity;
+read the [OSCA book](https://osca.bioconductor.org/) for the not-so-lazy way of doing things.
+
+```{r}
+library(scRNAseq)
+X <- GrunPancreasData()
+
+library(scater)
+X <- addPerCellQC(X)
+qcX <- quickPerCellQC(colData(X))
+X <- X[,!qcX$discard]
+
+library(scran)
+X <- logNormCounts(X)
+decX <- modelGeneVar(X)
+
+# No labels available, so we make our own clusters instead:
+X <- runPCA(X, ncomponents=20, subset_row=getTopHVGs(decX, n=2000))
+g <- buildSNNGraph(X, use.dimred="PCA")
+X$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We repeat this for the Muraro human pancreas dataset:
+
+```{r}
+Y <- MuraroPancreasData()
+Y <- addPerCellQC(Y)
+qcY <- quickPerCellQC(colData(Y))
+Y <- Y[,!qcY$discard]
+
+Y <- logNormCounts(Y)
+decY <- modelGeneVar(Y)
+
+# Not strictly necessary, but we do this for consistency with above:
+Y <- runPCA(Y, ncomponents=20, subset_row=getTopHVGs(decY, n=2000))
+g <- buildSNNGraph(Y, use.dimred="PCA")
+Y$cluster <- igraph::cluster_walktrap(g)$membership
+```
+
+We compute the HVGs and normalization across batches to get rid of major differences in coverage.
+Again, read the book for an explanation.
+
+```{r}
+universe <- intersect(rownames(X), rownames(Y))
+combined <- combineVar(decX[universe,], decY[universe,])
+chosen <- getTopHVGs(combined, n=5000)
+
+library(batchelor)
+stuff <- multiBatchNorm(X[universe,], Y[universe,])
+```
+
+## Before correction
+
+One evaluation of the correction is to see if it preserves the separation between clusters identified in the original data.
+Clusters identified in the same batch obviously don't suffer from a batch effect, so they shouldn't be altered by correction;
+we would ideally see that the clusters remain separated before and after correction.
+
+To obtain a pre-correction baseline for both datasets, 
+we compute cluster purity values using the `clusterPurity()` function from `r Biocpkg("scran")`.
+This defines the purity based on the contamination of each cluster's region of space by cells from another cluster.
+
+```{r}
+out <- clusterPurity(reducedDim(X), X$cluster, transposed=TRUE)
+boxplot(split(out, X$cluster), main="Grun original")
+```
+
+```{r}
+non.na <- !is.na(Y$label)
+out <- clusterPurity(reducedDim(Y)[non.na,], Y$label[non.na], transposed=TRUE)
+boxplot(split(out, Y$label[non.na]), main="Muraro original")
+```
+
+Values close to 1 indicate that all cells of a cluster are surrounded only by other cells from the same cluster.
+Our aim here is to compare these distributions before and after each correction.
+
+## Reference correction with `fastMNN()`
+
+We run `fastMNN()` to provide a standard for comparing `clusterMNN()`.
+We can see decent mixing on the $t$-SNE plot:
+
+```{r}
+ref <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen)
+ref <- runTSNE(ref, dimred="corrected")
+plotTSNE(ref, colour_by="batch")
+```
+
+As well as similar purity values as that before correction.
+Some of the Grun values drop but others increase so we'll call it even.
+
+```{r}
+out1 <- clusterPurity(reducedDim(ref)[ref$batch==1,], 
+    X$cluster, transposed=TRUE)
+boxplot(split(out1, X$cluster), main="Grun (fastMNN)")
+
+out2 <- clusterPurity(reducedDim(ref)[ref$batch==2,][non.na,], 
+    Y$label[non.na], transposed=TRUE)
+boxplot(split(out2, Y$label[non.na]), main="Muraro (fastMNN)")
+```
+
+We could also trick `clusterPurity()` in quantifying the mixing between batches.
+Perfectly mixed batches of the same composition and size should see purity values close to $n^{-1}$ for $n$ batches.
+In practice, differences in population composition will cause values to lie anywhere in $[0, 1]$
+so I'm not sure that this is worth all that much.
+
+```{r}
+all.clust <- c(X$cluster, Y$label)
+n <- table(all.clust)
+w <- 1/n[all.clust]
+keep <- !is.na(all.clust)
+
+out3 <- clusterPurity(reducedDim(ref)[keep,], 
+    ref$batch[keep], 
+    weighted=w[keep],
+    transposed=TRUE)
+boxplot(split(out3, ref$batch))
+```
+
+## Semi-supervised correction
+
+Grun doesn't have labels, so we'll just use its clusters in conjunction with Muraro's labels
+(we need to remove the `NA` labels ourselves).
+We also set `subset.row` for consistency, 
+though this is less important here as the cluster centroids are less affected by noise than per-cell expression values.
+
+```{r}
+m.out <- clusterMNN(stuff[[1]], stuff[[2]][,non.na], subset.row=chosen,
+    clusters=list(X$cluster, Y$label[non.na]))
+```
+
+The main output of `clusterMNN()` is not actually the per-cell corrected values.
+Instead, it is the information about which labels/clusters match up with each other across batches.
+We can extract this from the `metadata()` by grouping clusters into their metaclusters,
+whereby we can see that most of the main cell types in the Muraro dataset have matching clusters in the Grun data.
+This is often sufficient for downstream interpretation if the clusters/labels have already been characterized.
+
+```{r}
+clust.info <- metadata(m.out)$cluster
+split(clust.info$cluster, clust.info$meta)
+```
+
+Nonetheless, Figure 1 of our _Nature_ paper has to come from somewhere,
+and so `clusterMNN()` will also return the per-cell corrected values as a courtesy 
+to enable users to make those damn $t$-SNE plots.
+Again, we can see that the mixing of different cell types across batches is satisfactory
+without loss of much within-batch heterogeneity. 
+
+```{r}
+t.out <- runTSNE(m.out, dimred="corrected")
+plotTSNE(t.out, colour_by="batch")
+```
+
+```{r}
+out1 <- clusterPurity(reducedDim(m.out)[m.out$batch==1,],
+    X$cluster, transposed=TRUE)
+boxplot(split(out1, X$cluster), main="Grun (clusterMNN)")
+
+out2 <- clusterPurity(reducedDim(m.out)[m.out$batch==2,],
+    Y$label[non.na], transposed=TRUE)
+boxplot(split(out2, Y$label[non.na]), main="Muraro (clusterMNN)")
+```
+
+# Demonstration on brain data
+
+## Setup
+
+We will repeat this evaluation on a few mouse brain datasets.
+First, we set up the classic, beloved Zeisel dataset.
+
+```{r}
+library(scRNAseq)
+Z <- ZeiselBrainData()
+
+library(scater)
+Z <- addPerCellQC(Z, subsets=list(Mito=grep("mt-", rownames(Z))))
+qcZ <- quickPerCellQC(colData(Z), percent_subsets="subsets_Mito_percent")
+Z <- Z[,!qcZ$discard]
+
+library(scran)
+Z <- logNormCounts(Z)
+decZ <- modelGeneVar(Z)
+
+# Not technically necessary, but why not? 
+Z <- runPCA(Z, ncomponents=20, subset_row=getTopHVGs(decZ, n=2000))
+```
+
+We repeat this for the Tasic dataset:
+
+```{r}
+A <- TasicBrainData()
+A <- addPerCellQC(A, subsets=list(Mito=grep("mt_", rownames(A))))
+qcA <- quickPerCellQC(colData(A))
+A <- A[,!qcA$discard]
+
+A <- logNormCounts(A)
+decA <- modelGeneVar(A)
+
+# Not technically necessary, but why not? 
+A <- runPCA(A, ncomponents=20, subset_row=getTopHVGs(decA, n=2000))
+```
+
+We compute the HVGs and adjust the scale of coverage.
+
+```{r}
+universe <- intersect(rownames(Z), rownames(A))
+combined <- combineVar(decZ[universe,], decA[universe,])
+chosen <- getTopHVGs(combined, n=5000)
+
+library(batchelor)
+stuff <- multiBatchNorm(Z[universe,], A[universe,])
+```
+
+## Before correction
+
+We examine the cluster purities before any correction, 
+using the author-provided labels available for both datasets.
+
+```{r}
+out <- clusterPurity(reducedDim(Z), Z$level1class, transposed=TRUE)
+boxplot(split(out, Z$level1class), main="Zeisel original")
+```
+
+```{r}
+out <- clusterPurity(reducedDim(A), A$broad_type, transposed=TRUE)
+boxplot(split(out, A$broad_type), main="Tasic original")
+```
+
+## Reference correction with `fastMNN()`
+
+We again run `fastMNN()` to provide a standard for comparison.
+We see decent mixing as well as some clear Zeisel-specific cell types.
+
+```{r}
+ref <- fastMNN(stuff[[1]], stuff[[2]], subset.row=chosen)
+ref <- runTSNE(ref, dimred="corrected")
+plotTSNE(ref, colour_by="batch")
+```
+
+```{r}
+out1 <- clusterPurity(reducedDim(ref)[ref$batch==1,],
+    Z$level1class, transposed=TRUE)
+boxplot(split(out1, Z$level1class), main="Zeisel (fastMNN)")
+
+out2 <- clusterPurity(reducedDim(ref)[ref$batch==2,],
+    A$broad_type, transposed=TRUE)
+boxplot(split(out2, A$broad_type), main="Tasic (fastMNN)")
+```
+
+## Semi-supervised correction
+
+A key trick is to remove the unclassified cells from the Tasic dataset.
+This is literally a mystery bag of cells from across the coordinate space that have no assigned identity;
+the concept of a cluster centroid does not make sense here,
+and keeping these cells will cause inappropriate MNNs to form with a meaningless "unclassified" cell type.
+
+```{r}
+not.unclass <- A$broad_type!="Unclassified"
+m.out2 <- clusterMNN(stuff[[1]], stuff[[2]][,not.unclass], subset.row=chosen,
+    clusters=list(Z$level1class, A$broad_type[not.unclass]))
+```
+
+We can see that the metaclusters are quite sensible across batches.
+
+```{r}
+clust.info <- metadata(m.out2)$cluster
+split(clust.info$cluster, clust.info$meta)
+```
+
+Cluster purities are also comparable to what we saw for the original and `fastMNN()`-corrected values:
+
+```{r}
+out1 <- clusterPurity(reducedDim(m.out2)[m.out2$batch==1,],
+    Z$level1class, transposed=TRUE)
+boxplot(split(out1, Z$level1class), main="Zeisel (clusterMNN)")
+
+out2 <- clusterPurity(reducedDim(m.out2)[m.out2$batch==2,],
+    A$broad_type[not.unclass], transposed=TRUE)
+boxplot(split(out2, A$broad_type[not.unclass]), main="Tasic (clusterMNN)")
+```
+
+One key point is that the correction does not care - at all - about the structure within each cluster.
+In this case, the neuronal clusters are actually fairly heterogeneous,
+but no attempt is made by `clusterMNN()` to match up the internal structure of each cluster across batches.
+This causes some incomplete mixing within clusters compared to the `fastMNN()` output,
+but `clusterMNN()`'s use case doesn't really care about that.
+
+```{r}
+m.out2 <- runTSNE(m.out2, dimred="corrected")
+plotTSNE(m.out2, colour_by="batch")
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
