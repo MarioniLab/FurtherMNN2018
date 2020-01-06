@@ -118,8 +118,9 @@ boxplot(split(out, X$cluster), main="Grun original")
 ```
 
 ```{r}
-out <- clusterPurity(reducedDim(Y), Y$label, transposed=TRUE)
-boxplot(split(out, Y$label), main="Muraro original")
+non.na <- !is.na(Y$label)
+out <- clusterPurity(reducedDim(Y)[non.na,], Y$label[non.na], transposed=TRUE)
+boxplot(split(out, Y$label[non.na]), main="Muraro original")
 ```
 
 Values close to 1 indicate that all cells of a cluster are surrounded only by other cells from the same cluster.
@@ -144,9 +145,9 @@ out1 <- clusterPurity(reducedDim(ref)[ref$batch==1,],
     X$cluster, transposed=TRUE)
 boxplot(split(out1, X$cluster), main="Grun (fastMNN)")
 
-out2 <- clusterPurity(reducedDim(ref)[ref$batch==2,], 
-    Y$label, transposed=TRUE)
-boxplot(split(out2, Y$label), main="Muraro (fastMNN)")
+out2 <- clusterPurity(reducedDim(ref)[ref$batch==2,][non.na,], 
+    Y$label[non.na], transposed=TRUE)
+boxplot(split(out2, Y$label[non.na]), main="Muraro (fastMNN)")
 ```
 
 We could also trick `clusterPurity()` in quantifying the mixing between batches.
@@ -155,18 +156,27 @@ In practice, differences in population composition will cause values to lie anyw
 so I'm not sure that this is worth all that much.
 
 ```{r}
-out3 <- clusterPurity(reducedDim(ref), ref$batch, transposed=TRUE)
+all.clust <- c(X$cluster, Y$label)
+n <- table(all.clust)
+w <- 1/n[all.clust]
+keep <- !is.na(all.clust)
+
+out3 <- clusterPurity(reducedDim(ref)[keep,], 
+    ref$batch[keep], 
+    weighted=w[keep],
+    transposed=TRUE)
 boxplot(split(out3, ref$batch))
 ```
 
 ## Semi-supervised correction
 
-Grun doesn't have labels, so we'll just use its clusters in conjunction with Muraro's labels.
+Grun doesn't have labels, so we'll just use its clusters in conjunction with Muraro's labels
+(we need to remove the `NA` labels ourselves).
+We also set `subset.row` for consistency, 
+though this is less important here as the cluster centroids are less affected by noise than per-cell expression values.
 
 ```{r}
-non.na <- !is.na(Y$label)
-m.out <- clusterMNN(logcounts(stuff[[1]]), 
-    logcounts(stuff[[2]][,non.na]), 
+m.out <- clusterMNN(stuff[[1]], stuff[[2]][,non.na], subset.row=chosen,
     clusters=list(X$cluster, Y$label[non.na]))
 ```
 
@@ -297,7 +307,7 @@ and keeping these cells will cause inappropriate MNNs to form with a meaningless
 
 ```{r}
 not.unclass <- A$broad_type!="Unclassified"
-m.out2 <- clusterMNN(logcounts(stuff[[1]]), logcounts(stuff[[2]])[,not.unclass],
+m.out2 <- clusterMNN(stuff[[1]], stuff[[2]][,not.unclass], subset.row=chosen,
     clusters=list(Z$level1class, A$broad_type[not.unclass]))
 ```
 
